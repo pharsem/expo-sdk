@@ -11,6 +11,7 @@ use Expo\Push\Exception\MessageTooLargeException;
 use Expo\Push\Exception\InvalidMessageException;
 use Expo\Push\Storage\StorageEnvelope;
 use Expo\Push\Support\Json;
+use Expo\Push\Support\JsonObject;
 use JsonSerializable;
 use stdClass;
 
@@ -42,8 +43,15 @@ final readonly class PushMessage implements JsonSerializable
     /** @var list<PushToken> */
     public array $to;
 
-    /** @var array<string, mixed>|stdClass|null */
-    public array|stdClass|null $data;
+    /**
+     * The custom JSON that the app reads, or null.
+     *
+     * The value is a plain array, or a `JsonObject` when you gave an object.
+     * Neither one can change after the constructor ran, at any level.
+     *
+     * @var array<string, mixed>|JsonObject|null
+     */
+    public array|JsonObject|null $data;
 
     public ?Sound $sound;
 
@@ -57,7 +65,7 @@ final readonly class PushMessage implements JsonSerializable
      * @param PushToken|string|iterable<PushToken|string> $to                one or more Expo push tokens
      * @param string|null                                 $title             the title of the notification
      * @param string|null                                 $body              the text of the notification
-     * @param array<string, mixed>|stdClass|null          $data              custom JSON that the app reads
+     * @param array<string, mixed>|stdClass|JsonObject|null $data            custom JSON that the app reads
      * @param string|null                                 $subtitle          a second line below the title (iOS)
      * @param Sound|string|null                           $sound             the sound to play (iOS)
      * @param int|null                                    $ttl               seconds that Expo keeps the message for redelivery
@@ -85,7 +93,7 @@ final readonly class PushMessage implements JsonSerializable
         PushToken|string|iterable $to,
         public ?string $title = null,
         public ?string $body = null,
-        array|stdClass|null $data = null,
+        array|stdClass|JsonObject|null $data = null,
         public ?string $subtitle = null,
         Sound|string|null $sound = null,
         public ?int $ttl = null,
@@ -211,12 +219,13 @@ final readonly class PushMessage implements JsonSerializable
      * rejects it. An empty array goes on the wire as `{}`.
      *
      * The SDK copies the value. A later change to your own array or object cannot
-     * reach the message.
+     * reach the message, and neither can a change to what the message gives back:
+     * an object becomes an immutable `JsonObject` at every level.
      *
-     * @param array<string, mixed>|stdClass|null $data
+     * @param array<string, mixed>|stdClass|JsonObject|null $data
      */
     #[\NoDiscard('Use the new message that this method returns.')]
-    public function data(array|stdClass|null $data): self
+    public function data(array|stdClass|JsonObject|null $data): self
     {
         return $this->with('data', $data);
     }
@@ -229,11 +238,13 @@ final readonly class PushMessage implements JsonSerializable
     {
         $data = $this->data;
 
-        if ($data instanceof stdClass) {
-            $copy = clone $data;
-            $copy->{$key} = $value;
+        if ($data instanceof JsonObject) {
+            $copy = $data->toArray();
+            $copy[$key] = $value;
 
-            return $this->with('data', $copy);
+            // The value came in as an object, so it stays one. An array with
+            // one numeric key would otherwise go on the wire as a list.
+            return $this->with('data', (object) $copy);
         }
 
         $copy = $data ?? [];
@@ -617,11 +628,11 @@ final readonly class PushMessage implements JsonSerializable
     }
 
     /**
-     * @param array<string, mixed>|stdClass|null $data
+     * @param array<string, mixed>|stdClass|JsonObject|null $data
      *
-     * @return array<string, mixed>|stdClass|null
+     * @return array<string, mixed>|JsonObject|null
      */
-    private static function normalizeData(array|stdClass|null $data): array|stdClass|null
+    private static function normalizeData(array|stdClass|JsonObject|null $data): array|JsonObject|null
     {
         if ($data === null) {
             return null;
@@ -634,7 +645,7 @@ final readonly class PushMessage implements JsonSerializable
             );
         }
 
-        /** @var array<string, mixed>|stdClass $snapshot */
+        /** @var array<string, mixed>|JsonObject $snapshot */
         $snapshot = Json::snapshot($data);
 
         return $snapshot;
@@ -655,6 +666,10 @@ final readonly class PushMessage implements JsonSerializable
 
         if ($value instanceof stdClass) {
             return Json::objectToArray($value);
+        }
+
+        if ($value instanceof JsonObject) {
+            return $value->toArray();
         }
 
         if (!is_array($value)) {
