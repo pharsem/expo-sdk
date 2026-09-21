@@ -141,14 +141,14 @@ final class PushMessageTest extends TestCase
     {
         $this->expectException(InvalidMessageException::class);
 
-        Sound::critical('a.wav', 1.5);
+        self::ignoreResult(Sound::critical('a.wav', 1.5));
     }
 
     public function testANonFiniteSoundVolumeRaises(): void
     {
         $this->expectException(InvalidMessageException::class);
 
-        Sound::critical('a.wav', NAN);
+        self::ignoreResult(Sound::critical('a.wav', NAN));
     }
 
     public function testClearingAFieldRemovesItFromTheWire(): void
@@ -189,7 +189,7 @@ final class PushMessageTest extends TestCase
         $this->expectExceptionMessage('must be a JSON object');
 
         /** @phpstan-ignore argument.type */
-        PushMessage::to(self::TOKEN_A)->data([1, 2, 3]);
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->data([1, 2, 3]));
     }
 
     public function testANestedListStaysAList(): void
@@ -236,21 +236,21 @@ final class PushMessageTest extends TestCase
         $this->expectException(InvalidMessageException::class);
         $this->expectExceptionMessage('Give an array, a stdClass or a scalar');
 
-        PushMessage::to(self::TOKEN_A)->data(['when' => new DateTimeImmutable()]);
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->data(['when' => new DateTimeImmutable()]));
     }
 
     public function testNanAndInfinityAreRejected(): void
     {
         $this->expectException(InvalidMessageException::class);
 
-        PushMessage::to(self::TOKEN_A)->data(['value' => NAN]);
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->data(['value' => NAN]));
     }
 
     public function testInfinityIsRejected(): void
     {
         $this->expectException(InvalidMessageException::class);
 
-        PushMessage::to(self::TOKEN_A)->data(['value' => INF]);
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->data(['value' => INF]));
     }
 
     public function testInvalidUtf8InDataIsRejected(): void
@@ -258,7 +258,7 @@ final class PushMessageTest extends TestCase
         $this->expectException(InvalidMessageException::class);
         $this->expectExceptionMessage('not valid UTF-8');
 
-        PushMessage::to(self::TOKEN_A)->data(['value' => "\xB1\x31"]);
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->data(['value' => "\xB1\x31"]));
     }
 
     public function testInvalidUtf8InTheTitleIsRejected(): void
@@ -266,7 +266,7 @@ final class PushMessageTest extends TestCase
         $this->expectException(InvalidMessageException::class);
         $this->expectExceptionMessage('title is not valid UTF-8');
 
-        PushMessage::to(self::TOKEN_A)->title("bad \xB1\x31");
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->title("bad \xB1\x31"));
     }
 
     public function testAResourceInDataIsRejected(): void
@@ -276,7 +276,7 @@ final class PushMessageTest extends TestCase
 
         try {
             $this->expectException(InvalidMessageException::class);
-            PushMessage::to(self::TOKEN_A)->data(['handle' => $handle]);
+            self::ignoreResult(PushMessage::to(self::TOKEN_A)->data(['handle' => $handle]));
         } finally {
             fclose($handle);
         }
@@ -322,14 +322,14 @@ final class PushMessageTest extends TestCase
         $this->expectException(InvalidMessageException::class);
         $this->expectExceptionMessage('at least one recipient');
 
-        PushMessage::to([]);
+        self::ignoreResult(PushMessage::to([]));
     }
 
     public function testABadTokenIsRejected(): void
     {
         $this->expectException(InvalidTokenException::class);
 
-        PushMessage::to('not-a-token');
+        self::ignoreResult(PushMessage::to('not-a-token'));
     }
 
     public function testABadEnumValueNamesTheValidOnes(): void
@@ -337,28 +337,28 @@ final class PushMessageTest extends TestCase
         $this->expectException(InvalidMessageException::class);
         $this->expectExceptionMessage('default, normal, high');
 
-        PushMessage::to(self::TOKEN_A)->priority('urgent');
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->priority('urgent'));
     }
 
     public function testANegativeBadgeIsRejected(): void
     {
         $this->expectException(InvalidMessageException::class);
 
-        PushMessage::to(self::TOKEN_A)->badge(-1);
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->badge(-1));
     }
 
     public function testANegativeTtlIsRejected(): void
     {
         $this->expectException(InvalidMessageException::class);
 
-        PushMessage::to(self::TOKEN_A)->ttl(-1);
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->ttl(-1));
     }
 
     public function testARelevanceScoreOutOfRangeIsRejected(): void
     {
         $this->expectException(InvalidMessageException::class);
 
-        PushMessage::to(self::TOKEN_A)->relevanceScore(1.5);
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->relevanceScore(1.5));
     }
 
     public function testANonFiniteRelevanceScoreIsRejected(): void
@@ -366,7 +366,7 @@ final class PushMessageTest extends TestCase
         $this->expectException(InvalidMessageException::class);
         $this->expectExceptionMessage('finite');
 
-        PushMessage::to(self::TOKEN_A)->relevanceScore(NAN);
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->relevanceScore(NAN));
     }
 
     public function testAnExpirationAcceptsADateTime(): void
@@ -431,6 +431,6 @@ final class PushMessageTest extends TestCase
         $this->expectExceptionMessage('PushToken or a string');
 
         /** @phpstan-ignore argument.type */
-        PushMessage::to([42]);
+        self::ignoreResult(PushMessage::to([42]));
     }
 }

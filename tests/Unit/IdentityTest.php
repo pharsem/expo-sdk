@@ -104,10 +104,10 @@ final class IdentityTest extends TestCase
         $http = new FakeHttpClient();
 
         try {
-            $this->expo($http)->send([
+            self::ignoreResult($this->expo($http)->send([
                 PushMessage::to(self::TOKEN_A)->reference('same'),
                 PushMessage::to(self::TOKEN_B)->reference('same'),
-            ]);
+            ]));
             self::fail('The send must raise InvalidMessageException.');
         } catch (InvalidMessageException $exception) {
             self::assertStringContainsString('reference "same"', $exception->getMessage());

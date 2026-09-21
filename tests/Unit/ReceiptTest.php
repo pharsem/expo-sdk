@@ -202,10 +202,10 @@ final class ReceiptTest extends TestCase
         $http = new FakeHttpClient();
 
         try {
-            $this->expo($http)->receipts([
+            self::ignoreResult($this->expo($http)->receipts([
                 new ReceiptReference('r1', new PushToken(self::TOKEN_A)),
                 new ReceiptReference('r1', new PushToken(self::TOKEN_B)),
-            ]);
+            ]));
             self::fail('The lookup must raise InvalidMessageException.');
         } catch (InvalidMessageException $exception) {
             self::assertStringContainsString('two different device tokens', $exception->getMessage());

@@ -195,7 +195,7 @@ final class SendTest extends TestCase
         $mixed = [...$messages, 'not a message'];
 
         try {
-            $this->expo($http)->send($mixed);
+            self::ignoreResult($this->expo($http)->send($mixed));
             self::fail('The send must raise InvalidMessageException.');
         } catch (InvalidMessageException $exception) {
             self::assertStringContainsString('Every item must be a PushMessage', $exception->getMessage());
@@ -215,7 +215,7 @@ final class SendTest extends TestCase
         };
 
         try {
-            $this->expo($http)->send($messages());
+            self::ignoreResult($this->expo($http)->send($messages()));
             self::fail('The send must let the generator failure through.');
         } catch (\RuntimeException $exception) {
             self::assertSame('the database went away', $exception->getMessage());
@@ -245,10 +245,10 @@ final class SendTest extends TestCase
         $http = new FakeHttpClient();
 
         try {
-            $this->expo($http)->send([
+            self::ignoreResult($this->expo($http)->send([
                 PushMessage::to(self::TOKEN_A)->title('One'),
                 PushMessage::to(self::TOKEN_B)->data(['blob' => str_repeat('x', 5000)]),
-            ]);
+            ]));
             self::fail('The send must raise MessageTooLargeException.');
         } catch (MessageTooLargeException $exception) {
             self::assertSame(4096, $exception->limit);

@@ -149,7 +149,7 @@ final class BatchBoundaryTest extends TestCase
     {
         $this->expectException(\Expo\Push\Exception\InvalidMessageException::class);
 
-        Expo::chunk(PushMessage::to(self::TOKEN_A), 0);
+        self::ignoreResult(Expo::chunk(PushMessage::to(self::TOKEN_A), 0));
     }
 
     public function testASendChunkSizeAboveTheServiceMaximumRaises(): void
