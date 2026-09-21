@@ -19,7 +19,8 @@ namespace Expo\Push\RateLimit;
  * 2. `acquire()` must never sleep. Return `PermitDecision::wait()` and let the
  *    SDK schedule the wait, so other chunks keep moving.
  *
- * The SDK calls `acquire()` immediately before it dispatches a chunk.
+ * The SDK calls `acquire()` immediately before it dispatches a send chunk. A
+ * receipt lookup sends no notification, so it never asks for a permit.
  */
 interface RateLimiter
 {

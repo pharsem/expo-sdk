@@ -49,13 +49,14 @@ final readonly class TransportFailure
      */
     public function transmission(): Transmission
     {
-        $kind = $this->kind->transmission();
-
-        if ($kind === Transmission::NotTransmitted) {
-            return Transmission::NotTransmitted;
+        // A byte counter above zero is evidence that bytes left this process.
+        // It never proves that the server accepted anything, so it can only
+        // move the answer toward Unknown, never toward a clean rejection.
+        if ($this->bytesUploaded !== null && $this->bytesUploaded > 0) {
+            return Transmission::Unknown;
         }
 
-        return Transmission::Unknown;
+        return $this->kind->transmission();
     }
 
     /**

@@ -14,6 +14,7 @@ require __DIR__ . '/bootstrap.php';
 
 use Expo\Push\Expo;
 use Expo\Push\PushMessage;
+use Expo\Push\PushReceipt;
 use Expo\Push\Result\ReceiptReference;
 use Expo\Push\Result\ReceiptState;
 
@@ -70,12 +71,14 @@ $reader->queue(['data' => [
 $lookup = (new Expo(httpClient: $reader))->receipts($references);
 
 foreach ($lookup->entries() as $entry) {
+    $receipt = $entry->receipt;
+
     printf(
         "%-14s %-13s %s %s\n",
         $entry->id,
         $entry->state->value,
         $entry->token?->fingerprint() ?? '-',
-        $entry->receipt?->errorCode ?? ''
+        $receipt instanceof PushReceipt ? (string) $receipt->errorCode : ''
     );
 }
 

@@ -144,11 +144,14 @@ final readonly class Psr18HttpClient implements HttpClient
             return $plain === false ? $body : $plain;
         }
 
-        if ($encoding === 'deflate' && function_exists('gzinflate')) {
-            $plain = @gzinflate($body);
+        if ($encoding === 'deflate') {
+            // RFC 9110 defines deflate as the zlib format of RFC 1950, which
+            // gzuncompress() reads. Some servers send a raw deflate stream
+            // instead, and gzinflate() reads that one.
+            $plain = function_exists('gzuncompress') ? @gzuncompress($body) : false;
 
-            if ($plain === false) {
-                $plain = function_exists('gzuncompress') ? @gzuncompress($body) : false;
+            if ($plain === false && function_exists('gzinflate')) {
+                $plain = @gzinflate($body);
             }
 
             return $plain === false ? $body : $plain;

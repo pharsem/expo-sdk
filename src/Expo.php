@@ -104,7 +104,7 @@ final readonly class Expo
      * @param HttpClient|null   $httpClient           your own transport. The default one uses cURL
      * @param RetryPolicy|null  $retryPolicy          the retry rules. The default is `DeliveryRetryPolicy`
      * @param int               $concurrency          requests in flight, 1 to 6. The default is 1
-     * @param RateLimiter|null  $rateLimiter          an optional notification limiter. Off by default
+     * @param RateLimiter|null  $rateLimiter          an optional notification limiter for the sends. Off by default
      * @param string|null       $rateLimitBucket      the project key of the limiter. Required with a limiter
      * @param Observer|null     $observer             an optional watcher for the lifecycle events
      * @param bool              $compress             gzip for a body above 1024 bytes, when zlib is available
@@ -237,6 +237,7 @@ final readonly class Expo
             compress: $compress,
             connectTimeoutMs: $settings->connectTimeoutMs,
             requestTimeoutMs: $settings->requestTimeoutMs,
+            transportDecodes: $capabilities->decompressesResponses,
         );
     }
 
@@ -301,7 +302,7 @@ final readonly class Expo
             to: $to,
             title: $title,
             body: $body,
-            data: $data === [] ? null : $data,
+            data: $data,
             reference: $reference,
         ));
     }
@@ -337,7 +338,6 @@ final readonly class Expo
             dispatcher: $this->dispatcher(),
             clock: $this->clock,
             sleeper: $this->sleeper,
-            limiter: $this->rateLimiter,
             bucket: $this->bucket,
             observer: $this->observer,
             operationId: self::operationId(),

@@ -78,7 +78,16 @@ final class OfflineTransport implements HttpClient
      */
     private static function tickets(HttpRequest $request): array
     {
-        $messages = json_decode($request->body, true);
+        $body = $request->body;
+
+        // The SDK compresses a body above 1024 bytes, so a large example sends
+        // gzip. Read it the way a real server does.
+        if (($request->headers['content-encoding'] ?? null) === 'gzip') {
+            $plain = gzdecode($body);
+            $body = $plain === false ? $body : $plain;
+        }
+
+        $messages = json_decode($body, true);
         $tickets = [];
 
         if (is_array($messages)) {

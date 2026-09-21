@@ -13,7 +13,7 @@ use Expo\Push\Plan\ReceiptChunk;
 use Expo\Push\Plan\ReceiptPlan;
 use Expo\Push\Protocol\ReceiptResponse;
 use Expo\Push\Protocol\ReceiptResponseParser;
-use Expo\Push\RateLimit\RateLimiter;
+use Expo\Push\RateLimit\NullRateLimiter;
 use Expo\Push\Result\FailureCategory;
 use Expo\Push\Result\OperationType;
 use Expo\Push\Result\ReceiptEntry;
@@ -31,6 +31,10 @@ use Expo\Push\Support\Sleeper;
  * send. The states stay strict: a valid answer without an entry gives `Missing`,
  * a broken entry gives `Malformed`, a failed request gives `LookupFailed`, and a
  * chunk that never went out gives `NotAttempted`.
+ *
+ * The notification limiter never applies here. Expo counts notifications, and a
+ * receipt lookup sends none. A lookup of 1000 IDs would also never fit a limiter
+ * of 600 permits, so the limit would block work that it was never meant to bound.
  */
 final readonly class ReceiptOperation
 {
@@ -45,7 +49,6 @@ final readonly class ReceiptOperation
         private Dispatcher $dispatcher,
         private Clock $clock,
         private Sleeper $sleeper,
-        private RateLimiter $limiter,
         private string $bucket,
         private SafeObserver $observer,
         private string $operationId,
@@ -92,7 +95,7 @@ final readonly class ReceiptOperation
             $this->dispatcher,
             $this->clock,
             $this->sleeper,
-            $this->limiter,
+            new NullRateLimiter(),
             $this->bucket,
             $this->observer,
             $this->operationId,

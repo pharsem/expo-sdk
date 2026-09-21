@@ -3,4 +3,6 @@ parameters:
     paths:
         - src
         - tests
+        - examples
+        - benchmarks
     treatPhpDocTypesAsCertain: false

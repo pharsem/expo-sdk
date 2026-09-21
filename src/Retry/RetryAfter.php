@@ -87,9 +87,19 @@ final class RetryAfter
         foreach ($formats as $format) {
             $date = \DateTimeImmutable::createFromFormat('!' . $format, $value, $utc);
 
-            if ($date instanceof \DateTimeImmutable) {
-                return $date->getTimestamp() * 1000;
+            if (!$date instanceof \DateTimeImmutable) {
+                continue;
             }
+
+            // createFromFormat rolls an impossible date forward: 32 January
+            // becomes 1 February. The SDK reads the warning and drops the value.
+            $errors = \DateTimeImmutable::getLastErrors();
+
+            if (is_array($errors) && ($errors['error_count'] > 0 || $errors['warning_count'] > 0)) {
+                continue;
+            }
+
+            return $date->getTimestamp() * 1000;
         }
 
         return null;

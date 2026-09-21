@@ -32,6 +32,7 @@ final readonly class RequestFactory
      * @param bool        $compress         compresses a large body with gzip when zlib is available
      * @param int         $connectTimeoutMs the connection timeout of one attempt
      * @param int         $requestTimeoutMs the total timeout of one attempt
+     * @param bool        $transportDecodes true when the transport decompresses an answer by itself
      */
     public function __construct(
         private string $baseUrl,
@@ -40,6 +41,7 @@ final readonly class RequestFactory
         private bool $compress,
         private int $connectTimeoutMs,
         private int $requestTimeoutMs,
+        private bool $transportDecodes = false,
     ) {
         $scheme = strtolower((string) parse_url($baseUrl, PHP_URL_SCHEME));
 
@@ -75,11 +77,37 @@ final readonly class RequestFactory
         return $this->build(self::RECEIPTS_PATH, Json::encode($body, 'receipt request'));
     }
 
+    /**
+     * The encodings that the SDK can read back.
+     *
+     * The SDK never asks for an encoding that nothing can decode. A PSR-18
+     * client on a build without zlib therefore gets a plain answer, and a valid
+     * answer never turns into a protocol failure.
+     */
+    private function acceptEncoding(): string
+    {
+        return self::negotiateAcceptEncoding(
+            $this->transportDecodes,
+            function_exists('gzdecode') && function_exists('gzuncompress')
+        );
+    }
+
+    /**
+     * The decision behind `acceptEncoding()`, without the environment.
+     *
+     * @param bool $transportDecodes true when the transport decompresses by itself
+     * @param bool $zlibAvailable    true when this build can decompress an answer
+     */
+    public static function negotiateAcceptEncoding(bool $transportDecodes, bool $zlibAvailable): string
+    {
+        return $transportDecodes || $zlibAvailable ? 'gzip, deflate' : 'identity';
+    }
+
     private function build(string $path, string $json): HttpRequest
     {
         $headers = [
             'accept' => 'application/json',
-            'accept-encoding' => 'gzip, deflate',
+            'accept-encoding' => $this->acceptEncoding(),
             'content-type' => 'application/json',
             'user-agent' => $this->userAgent,
         ];

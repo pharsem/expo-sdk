@@ -12,11 +12,13 @@ declare(strict_types=1);
 
 require __DIR__ . '/bootstrap.php';
 
+use Expo\Push\ErrorClassification;
 use Expo\Push\Expo;
 use Expo\Push\Http\TransportFailureKind;
 use Expo\Push\PushError;
 use Expo\Push\PushMessage;
 use Expo\Push\Result\Acceptance;
+use Expo\Push\Result\NotAcceptedReason;
 use Expo\Push\Retry\NoRetryPolicy;
 
 $transport = new OfflineTransport();
@@ -41,11 +43,15 @@ exampleHeading('a batch of six notifications in chunks of two');
 $result = $expo->send(PushMessage::to(exampleTokens(6))->title('New release')->reference('release-2.0'));
 
 foreach ($result->outcomes() as $outcome) {
+    $detail = $outcome->reason instanceof NotAcceptedReason
+        ? $outcome->reason->value
+        : ($outcome->receiptId() ?? '-');
+
     printf(
         "#%d %-13s %-22s %s\n",
         $outcome->index,
         $outcome->acceptance->value,
-        $outcome->reason?->value ?? ($outcome->receiptId() ?? '-'),
+        $detail,
         $outcome->duplicateRisk ? 'duplicate risk' : ''
     );
 }
@@ -75,11 +81,13 @@ foreach ($result->requestFailures() as $failure) {
 exampleHeading('an error ticket is data, not an exception');
 
 foreach ($result->tickets()->errors() as $ticket) {
+    $classification = $ticket->classification();
+
     printf(
         "%s -> %s (%s), token invalid: %s, may succeed later: %s\n",
         $ticket->token?->fingerprint() ?? '-',
         $ticket->errorCode ?? 'unknown',
-        $ticket->classification()?->value ?? '-',
+        $classification instanceof ErrorClassification ? $classification->value : '-',
         $ticket->invalidatesToken() ? 'yes' : 'no',
         var_export($ticket->error?->maySucceedLater(), true)
     );

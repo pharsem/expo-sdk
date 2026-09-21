@@ -51,22 +51,6 @@ final readonly class ReceiptEntry implements JsonSerializable
     }
 
     /**
-     * A copy with another state and receipt, for a merge.
-     */
-    public function with(ReceiptState $state, ?PushReceipt $receipt, ?int $failureIndex): self
-    {
-        return new self(
-            $this->id,
-            $state,
-            $receipt,
-            $this->token ?? $receipt?->token,
-            $this->notificationIndex,
-            $this->reference,
-            $failureIndex,
-        );
-    }
-
-    /**
      * @return array<string, mixed>
      */
     public function toStorageArray(): array

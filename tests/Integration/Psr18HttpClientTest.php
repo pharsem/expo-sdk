@@ -142,8 +142,31 @@ final class Psr18HttpClientTest extends TestCase
         self::assertCount(1, $result->accepted());
     }
 
+    /**
+     * RFC 9110 defines `deflate` as the zlib format of RFC 1950, which
+     * gzcompress() writes and gzuncompress() reads.
+     */
     #[RequiresPhpExtension('zlib')]
-    public function testItDecompressesADeflateBody(): void
+    public function testItDecompressesAZlibWrappedDeflateBody(): void
+    {
+        $plain = '{"data":[{"status":"ok","id":"r1"}]}';
+        $psr18 = (new FakePsr18Client())->queue(
+            (string) gzcompress($plain),
+            200,
+            ['Content-Encoding' => 'deflate']
+        );
+
+        $result = $this->expo($this->client($psr18))->send(PushMessage::to(self::TOKEN_A));
+
+        self::assertCount(1, $result->accepted());
+        self::assertSame('r1', $result->outcomes()[0]->receiptId());
+    }
+
+    /**
+     * Some servers send a raw deflate stream instead. The adapter reads that too.
+     */
+    #[RequiresPhpExtension('zlib')]
+    public function testItDecompressesARawDeflateBody(): void
     {
         $plain = '{"data":[{"status":"ok","id":"r1"}]}';
         $psr18 = (new FakePsr18Client())->queue(
@@ -155,6 +178,23 @@ final class Psr18HttpClientTest extends TestCase
         $result = $this->expo($this->client($psr18))->send(PushMessage::to(self::TOKEN_A));
 
         self::assertCount(1, $result->accepted());
+    }
+
+    /**
+     * A PSR-18 transport cannot decompress by itself, so the SDK asks for an
+     * encoding only when this build can decode it.
+     */
+    public function testThePsr18RequestAsksForAnEncodingThatTheSdkCanRead(): void
+    {
+        $psr18 = (new FakePsr18Client())->queue('{"data":[{"status":"ok","id":"r1"}]}');
+
+        $result = $this->expo($this->client($psr18))->send(PushMessage::to(self::TOKEN_A));
+
+        self::assertCount(1, $result->accepted());
+        self::assertSame(
+            extension_loaded('zlib') ? 'gzip, deflate' : 'identity',
+            $psr18->requests[0]->getHeaderLine('accept-encoding')
+        );
     }
 
     public function testAConcurrencyAboveOneIsRejectedForThisTransport(): void

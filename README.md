@@ -376,6 +376,9 @@ $expo = new Expo(
 The window slides, so no burst passes at a window boundary. The limiter counts
 notifications, not requests, and every retry takes its own permits.
 
+The limiter bounds a send and nothing else. A receipt lookup sends no
+notification, so `receipts()` never asks for a permit.
+
 One instance coordinates every client that shares it in one PHP process. A
 second process, a second pod and a second worker each get their own window.
 Write your own `RateLimiter` against a shared store when you need one limit for

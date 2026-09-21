@@ -100,7 +100,9 @@ final class StorageEnvelope
      */
     public static function listOfArrays(string $type, array $data, string $field): array
     {
-        $value = $data[$field] ?? [];
+        // A missing field is a truncated array, not an empty list. Every writer
+        // of the SDK emits the field, so silence here would lose the outcomes.
+        $value = $data[$field] ?? null;
 
         if (!is_array($value) || !array_is_list($value)) {
             throw InvalidStorageException::missingField($type, $field);
@@ -131,7 +133,7 @@ final class StorageEnvelope
      */
     public static function listOfStrings(string $type, array $data, string $field): array
     {
-        $value = $data[$field] ?? [];
+        $value = $data[$field] ?? null;
 
         if (!is_array($value) || !array_is_list($value)) {
             throw InvalidStorageException::missingField($type, $field);

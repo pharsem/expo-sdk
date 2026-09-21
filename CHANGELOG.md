@@ -68,6 +68,11 @@ failure, so a late failure can never take the earlier answers with it.
   rejects a top level list, and sends an empty object as `{}`.
 - Every JSON encode failure raises `InvalidMessageException` before the request.
 - The default user agent reports `expo-sdk-php/2.0.0`.
+- The notification limiter bounds a send only. A receipt lookup sends no
+  notification, so it never asks for a permit.
+- The SDK asks for `gzip, deflate` only when the transport or this build can
+  decompress the answer. Otherwise it asks for `identity`.
+- `notify(data: [])` keeps the empty JSON object, the same as `PushMessage::data([])`.
 
 ### Removed
 
@@ -90,6 +95,16 @@ failure, so a late failure can never take the earlier answers with it.
 - The send parser turned a malformed entry into a rejected device, and it
   accepted an answer with the wrong number of tickets.
 - Repeated collection merges copied every earlier element again for each chunk.
+- A transport failure with uploaded bytes claimed that nothing left the process.
+  Evidence of sent bytes now moves the acceptance to unknown, never to a clean
+  rejection.
+- A truncated stored array read as an empty result. A missing list field now
+  raises `InvalidStorageException`.
+- `ReceiptResult::merge()` dropped the device token, the notification index and
+  the reference of the later lookup.
+- `Retry-After` accepted a date that does not exist, such as 32 January, and
+  deferred the work.
+- `Content-Encoding: deflate` stayed compressed for a zlib wrapped body.
 
 ## 1.0.0 - 2026-09-21
 

@@ -336,17 +336,42 @@ final readonly class ReceiptResult implements JsonSerializable
 
             $current = $entries[$position];
 
+            // The correlation of the two entries joins, whichever state wins. A
+            // later lookup that knows the device must not lose it, and an
+            // earlier one must not lose it either.
+            $token = $current->token ?? $entry->token;
+            $notificationIndex = $current->notificationIndex ?? $entry->notificationIndex;
+            $reference = $current->reference ?? $entry->reference;
+
             if ($current->isReturned() && $entry->isReturned()) {
                 if (!self::sameReceipt($current->receipt, $entry->receipt) && !in_array($entry->id, $conflicts, true)) {
                     $conflicts[] = $entry->id;
                 }
 
+                $entries[$position] = new ReceiptEntry(
+                    $current->id,
+                    $current->state,
+                    $current->receipt,
+                    $token ?? $current->receipt?->token,
+                    $notificationIndex,
+                    $reference,
+                    $current->failureIndex,
+                );
+
                 continue;
             }
 
-            if (self::rank($entry->state) > self::rank($current->state)) {
-                $entries[$position] = $current->with($entry->state, $entry->receipt, $shifted);
-            }
+            $wins = self::rank($entry->state) > self::rank($current->state);
+
+            $entries[$position] = new ReceiptEntry(
+                $current->id,
+                $wins ? $entry->state : $current->state,
+                $wins ? $entry->receipt : $current->receipt,
+                $token ?? ($wins ? $entry->receipt?->token : $current->receipt?->token),
+                $notificationIndex,
+                $reference,
+                $wins ? $shifted : $current->failureIndex,
+            );
         }
 
         return new self(
