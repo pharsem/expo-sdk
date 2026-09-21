@@ -1,0 +1,16 @@
+# The Codecov settings. See https://docs.codecov.com/docs/codecov-yaml
+coverage:
+  status:
+    # A drop of more than 1 point against the base marks the check red.
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    # The patch check reports the new lines. It never marks a pull request red.
+    patch:
+      default:
+        informational: true
+
+comment:
+  # Codecov comments on a pull request only when the coverage changes.
+  require_changes: true

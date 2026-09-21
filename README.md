@@ -1,5 +1,9 @@
 # Expo Push SDK for PHP
 
+[![CI](https://github.com/pharsem/expo-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/pharsem/expo-sdk/actions/workflows/ci.yml)
+[![Packagist](https://img.shields.io/packagist/v/pharsem/expo-sdk)](https://packagist.org/packages/pharsem/expo-sdk)
+[![Coverage](https://codecov.io/gh/pharsem/expo-sdk/branch/main/graph/badge.svg)](https://codecov.io/gh/pharsem/expo-sdk)
+
 Send Expo push notifications from PHP, and always know what happened.
 
 ```php
