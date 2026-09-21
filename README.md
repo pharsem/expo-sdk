@@ -77,10 +77,29 @@ Expo did. `recovery` says what is left to do:
 | `Retryable` | the failure can pass later | wait for `earliestRetryAtUtcMs`, then decide |
 | `NeedsIntervention` | a repeat needs a fix first | read the failure, fix the cause, then decide |
 
-A notification that Expo refused with `429 Too Many Requests` is `NotAccepted`
-and `Retryable`. A notification that Expo refused with `DeviceNotRegistered` is
-`NotAccepted` and `None`. A credential failure gives `NeedsIntervention`: the
-work is open, and no repeat works before somebody fixes the credentials.
+Only two rejections close the work: `DeviceNotRegistered` and `MessageTooBig`.
+Both of them need another device or another message, so no repeat of this one
+can pass. Everything else stays open:
+
+| Expo says | Acceptance | Recovery |
+| --- | --- | --- |
+| a ticket with the status `ok` | `Accepted` | `None` |
+| `DeviceNotRegistered`, `MessageTooBig` | `NotAccepted` | `None` |
+| `MessageRateExceeded` | `NotAccepted` | `Retryable` |
+| `InvalidCredentials`, `InvalidProviderToken`, `MismatchSenderId` | `NotAccepted` | `NeedsIntervention` |
+| `ExpoError`, `ProviderError`, a code that the SDK does not know | `NotAccepted` | `NeedsIntervention` |
+| `429 Too Many Requests` for the whole request | `NotAccepted` | `Retryable` |
+| `401` for the whole request | `NotAccepted` | `NeedsIntervention` |
+
+A credential error keeps the token valid. Fix the credentials in the Expo
+dashboard, and the notification goes out.
+
+`needsAttention()` reads the same rule, so the two can never disagree:
+
+```php
+$result->needsAttention();          // true while anything stays open
+$result->recoverable()->isEmpty();  // false at the same moment
+```
 
 ```php
 foreach ($result->outcomes() as $outcome) {
@@ -243,9 +262,15 @@ $all = $receipts->merge($later);
 A returned receipt never falls back to missing. Two returned receipts that do
 not agree keep the first one, and the ID goes to `conflicts()`.
 
-Two receipts agree when their status, their error code, their message and their
-structured `details` all agree. The order of the keys inside `details` means
-nothing, and a JSON object never equals a JSON list.
+Two receipts agree when their status, their error code, their message, their
+structured `details` and their device all agree. The order of the keys inside
+`details` means nothing. Two answers that give one receipt ID two different
+devices do not agree, and one answer that knows the device agrees with one that
+does not: the known token only adds what the other one lacks.
+
+One limit is worth knowing. The receipt parser turns every nested object inside
+`details` into an array before the SDK stores it, so a nested `{}` and a nested
+`[]` are the same value by the time a merge compares them.
 
 A conflict never goes away. A merge unites the conflicts of both sides before it
 looks for new ones, so it makes no difference which side already knew about one,
@@ -597,8 +622,17 @@ A stored array must carry what it claims. The reader raises
 - `duplicateRisk`, `retryable` and `deferred` must be real booleans. A missing
   flag never becomes the reassuring answer.
 - A ticket, a receipt and an entry must name the same device and the same ID.
+  Every later reference of one entry names that ID too.
 - A state value of this SDK must be one that this SDK writes. An error code of
   Expo may be anything: provider codes stay open.
+- An outcome names the request failure that explains it, by position. The
+  position must be in the list, and that failure must have held this
+  notification.
+- A recovery value may not claim less than the evidence demands. An outcome
+  that Expo never accepted cannot read as finished work.
+- A field that is there must be valid. A present field of the wrong type is
+  broken data, not an absent field, so a corrupted retry time never reads as
+  "retry now".
 
 A valid history is not a contradiction. An accepted outcome may carry an earlier
 ambiguous attempt and a duplicate risk, and an unknown outcome may carry the
@@ -606,7 +640,14 @@ rejection that came after one.
 
 One rule covers an older writer of the same version: an outcome from 2.0.0 holds
 no `recovery` field. The reader then derives the careful value, which never
-turns open work into closed work.
+turns open work into closed work. A `recovery` field that is there must be
+valid, and an explicit `null` is a broken field, not a missing one.
+
+A JSON object whose keys are all numbers decodes into a PHP list. In storage the
+`data` field of a message is always an object, so the reader gives that shape
+back as an object. Decode the stored JSON with `json_decode($json, true)` and a
+nested empty object comes back as an empty list, because the PHP array cannot
+hold the difference. Decode into objects when you need it.
 
 A stored array never holds a live exception, an HTTP client, a clock, a callback
 or a credential.

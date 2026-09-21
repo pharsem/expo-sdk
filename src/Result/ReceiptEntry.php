@@ -185,6 +185,10 @@ final readonly class ReceiptEntry implements JsonSerializable
             otherReferences: $others,
         );
 
+        foreach ($others as $reference) {
+            self::assertReferenceBelongs($entry, $reference);
+        }
+
         // The entry, its receipt and its references all name one notification.
         // A stored array that gives them two devices is broken, not merged.
         $receiptToken = $entry->receipt?->token;
@@ -204,6 +208,37 @@ final readonly class ReceiptEntry implements JsonSerializable
         }
 
         return $entry;
+    }
+
+    /**
+     * Refuses a later reference that belongs to another ID or another device.
+     *
+     * Every reference of one entry asks about the same receipt ID. A stored
+     * list that mixes two IDs would give one notification the correlation of
+     * another one.
+     *
+     * @throws InvalidStorageException
+     */
+    private static function assertReferenceBelongs(self $entry, ReceiptReference $reference): void
+    {
+        if ($reference->id !== $entry->id) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s "%s" holds a later reference for "%s". Every reference names one ID.',
+                self::STORAGE_TYPE,
+                $entry->id,
+                $reference->id
+            ));
+        }
+
+        $token = $reference->token;
+
+        if ($token !== null && $entry->token !== null && $token->value !== $entry->token->value) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s "%s" holds a later reference of another device. The association is broken.',
+                self::STORAGE_TYPE,
+                $entry->id
+            ));
+        }
     }
 
     /**

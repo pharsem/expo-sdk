@@ -358,6 +358,16 @@ final class Json
 
             /** @var mixed $item */
             foreach (get_object_vars($value) as $key => $item) {
+                // PHP allows a dynamic property name that is not valid UTF-8,
+                // and JSON has no place for one. An array key gets the same
+                // check below.
+                if (is_string($key) && !self::isUtf8($key)) {
+                    throw new InvalidMessageException(sprintf(
+                        'The %s has a property name that is not valid UTF-8.',
+                        self::shortPath($path)
+                    ));
+                }
+
                 /** @var mixed $copied */
                 $copied = self::copy($item, $path . '.' . $key, $depth + 1, $ancestors);
                 $copy[$key] = $copied;

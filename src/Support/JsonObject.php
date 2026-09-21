@@ -6,6 +6,7 @@ namespace Expo\Push\Support;
 
 use ArrayIterator;
 use Countable;
+use Expo\Push\Exception\InvalidMessageException;
 use IteratorAggregate;
 use JsonSerializable;
 use LogicException;
@@ -47,15 +48,96 @@ final readonly class JsonObject implements JsonSerializable, IteratorAggregate, 
     }
 
     /**
-     * Wraps values that `Json::snapshot()` already checked and copied.
+     * Wraps values that hold nothing mutable and nothing that JSON refuses.
+     *
+     * `Json::snapshot()` builds this array from the bottom up, so the check
+     * here only reads. It needs no copy: a PHP array is a value, and a nested
+     * `JsonObject` cannot change either.
+     *
+     * The check runs for every caller, not only for the normalizer. A wrapper
+     * around a live `stdClass` would give the mutation path back.
      *
      * @param array<string, mixed> $values
+     *
+     * @throws \Expo\Push\Exception\InvalidMessageException when a value is
+     *                                                      mutable, or JSON
+     *                                                      cannot hold it
      *
      * @internal
      */
     public static function fromNormalized(array $values): self
     {
+        self::assertHoldsOnlyImmutableJson($values, 1, 'data');
+
         return new self($values);
+    }
+
+    /**
+     * @param array<array-key, mixed> $values
+     *
+     * @throws \Expo\Push\Exception\InvalidMessageException
+     */
+    private static function assertHoldsOnlyImmutableJson(array $values, int $depth, string $path): void
+    {
+        if ($depth > Json::MAX_DEPTH) {
+            throw new InvalidMessageException(sprintf(
+                'The %s nests deeper than %d levels. JSON encoding stops there.',
+                $path,
+                Json::MAX_DEPTH
+            ));
+        }
+
+        /** @var mixed $value */
+        foreach ($values as $key => $value) {
+            $here = $path . '.' . $key;
+
+            if (is_string($key) && !Json::isUtf8($key)) {
+                throw new InvalidMessageException(sprintf('The %s has a key that is not valid UTF-8.', $path));
+            }
+
+            if ($value instanceof self) {
+                continue;
+            }
+
+            if (is_array($value)) {
+                self::assertHoldsOnlyImmutableJson($value, $depth + 1, $here);
+
+                continue;
+            }
+
+            if ($value === null || is_bool($value) || is_int($value)) {
+                continue;
+            }
+
+            if (is_float($value)) {
+                if (!is_finite($value)) {
+                    throw new InvalidMessageException(sprintf(
+                        'The %s holds %s. JSON has no value for it.',
+                        $here,
+                        is_nan($value) ? 'NAN' : 'INF'
+                    ));
+                }
+
+                continue;
+            }
+
+            if (is_string($value)) {
+                if (!Json::isUtf8($value)) {
+                    throw new InvalidMessageException(sprintf(
+                        'The %s holds a string that is not valid UTF-8.',
+                        $here
+                    ));
+                }
+
+                continue;
+            }
+
+            throw new InvalidMessageException(sprintf(
+                'The %s holds a %s. A JsonObject holds only immutable JSON values.',
+                $here,
+                get_debug_type($value)
+            ));
+        }
     }
 
     /**

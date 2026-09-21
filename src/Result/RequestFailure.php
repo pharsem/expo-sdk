@@ -208,8 +208,10 @@ final readonly class RequestFailure implements JsonSerializable
             ids: $ids,
             category: $category,
             message: $message,
-            httpStatus: is_int($data['httpStatus'] ?? null) ? (int) $data['httpStatus'] : null,
-            transportCode: is_string($data['transportCode'] ?? null) ? (string) $data['transportCode'] : null,
+            // A present field of the wrong type is broken data, not an absent
+            // field. A corrupted retry time must not read as "retry now".
+            httpStatus: self::optionalInt($data, 'httpStatus'),
+            transportCode: self::optionalString($data, 'transportCode'),
             expoErrors: array_map(
                 static fn (array $entry): ExpoApiError => ExpoApiError::fromStorageArray($entry),
                 StorageEnvelope::listOfArrays(self::STORAGE_TYPE, $data, 'expoErrors')
@@ -223,9 +225,7 @@ final readonly class RequestFailure implements JsonSerializable
             // refuses instead of guessing.
             retryable: self::requiredBool($data, 'retryable'),
             deferred: self::requiredBool($data, 'deferred'),
-            earliestRetryAtUtcMs: is_int($data['earliestRetryAtUtcMs'] ?? null)
-                ? (int) $data['earliestRetryAtUtcMs']
-                : null,
+            earliestRetryAtUtcMs: self::optionalInt($data, 'earliestRetryAtUtcMs'),
         );
     }
 
@@ -248,6 +248,46 @@ final readonly class RequestFailure implements JsonSerializable
         $value = $data[$field] ?? null;
 
         if (!is_bool($value)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidStorageException
+     */
+    private static function optionalInt(array $data, string $field): ?int
+    {
+        $value = $data[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_int($value)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidStorageException
+     */
+    private static function optionalString(array $data, string $field): ?string
+    {
+        $value = $data[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
         }
 

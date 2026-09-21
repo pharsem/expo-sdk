@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Expo\Push\Result;
 
+use Expo\Push\ErrorClassification;
+
 /**
  * What an application may do with one unresolved notification.
  *
@@ -45,5 +47,32 @@ enum RecoveryDisposition: string
     public function isOpen(): bool
     {
         return $this !== self::None;
+    }
+
+    /**
+     * What one rejection of one device leaves open.
+     *
+     * Only two kinds of rejection close the work: a device that no longer
+     * accepts notifications, and a payload that is too large. Both of them need
+     * a different message or a different device, so a repeat of this one cannot
+     * pass.
+     *
+     * A credential error is not one of them. The token stays valid, and the
+     * notification goes out after somebody fixes the credentials.
+     *
+     * @param ErrorClassification|null $classification the error of the ticket
+     *                                                 or the receipt, or null
+     *                                                 when there is no error
+     */
+    public static function forClassification(?ErrorClassification $classification): self
+    {
+        return match ($classification) {
+            null => self::None,
+            ErrorClassification::TokenInvalid, ErrorClassification::PayloadTooBig => self::None,
+            ErrorClassification::Throttled => self::Retryable,
+            ErrorClassification::Credentials,
+            ErrorClassification::ProviderProblem,
+            ErrorClassification::Unknown => self::NeedsIntervention,
+        };
     }
 }

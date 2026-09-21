@@ -32,6 +32,33 @@ go out again, and which evidence has to survive.
 - A message is immutable at every level. Before, a public read of the `data`
   property handed out the stored `stdClass`, so
   `$message->data->orderId = 456` changed the payload.
+- A credential error keeps the work open. Before, `InvalidCredentials`,
+  `InvalidProviderToken` and `MismatchSenderId` closed it, although the token
+  stays valid and a fix makes the notification sendable. Only
+  `DeviceNotRegistered` and `MessageTooBig` close the work now.
+- `needsAttention()` reads the same rule as `recoverable()`. Before, an open
+  `MessageRateExceeded` ticket brought no request failure, so the two answers
+  disagreed.
+- `receiptId()` needs a ticket that reports success. Before, an outcome that
+  claimed acceptance with an error ticket still gave an ID back, and
+  `isCompleteSuccess()` believed it.
+- A message with numeric data keys survives storage. Before, the round trip
+  turned the object into a PHP list and the constructor refused it.
+- A stored `recovery` value may not claim less than the evidence demands, and an
+  explicit `null` is a broken field. Before, changing a retryable 429 to `none`
+  dropped that work out of every recovery list in silence.
+- An outcome that points at a request failure which is not there no longer
+  loads. The same check covers a lookup entry and its failure.
+- Every later reference of one receipt entry names that entry's ID and device.
+  Before, storage could attach the correlation of another notification.
+- Two answers that give one receipt ID two different devices are a conflict.
+- A present request-failure field of the wrong type raises. Before,
+  `httpStatus`, `transportCode` and `earliestRetryAtUtcMs` became null, so a
+  corrupted retry time read as "retry now".
+- `Json::snapshot()` checks an object property name for UTF-8, as it already
+  did for an array key.
+- `JsonObject::fromNormalized()` checks what it wraps. Before, a caller could
+  wrap a live `stdClass` and reopen the mutation path.
 
 ### Added
 

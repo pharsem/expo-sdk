@@ -652,11 +652,18 @@ final readonly class PushMessage implements JsonSerializable
     }
 
     /**
+     * The custom data of a stored message.
+     *
+     * In storage the field is always a JSON object, never a JSON list. A JSON
+     * object whose keys are numbers decodes into a PHP list, so the reader
+     * gives that shape back as an object. Without it, a valid message that the
+     * SDK wrote would come back as a list and the constructor would refuse it.
+     *
      * @param array<string, mixed> $data
      *
-     * @return array<string, mixed>|null
+     * @return array<string, mixed>|stdClass|JsonObject|null
      */
-    private static function storedData(array $data): ?array
+    private static function storedData(array $data): array|stdClass|JsonObject|null
     {
         $value = $data['data'] ?? null;
 
@@ -664,16 +671,16 @@ final readonly class PushMessage implements JsonSerializable
             return null;
         }
 
-        if ($value instanceof stdClass) {
-            return Json::objectToArray($value);
-        }
-
-        if ($value instanceof JsonObject) {
-            return $value->toArray();
+        if ($value instanceof stdClass || $value instanceof JsonObject) {
+            return $value;
         }
 
         if (!is_array($value)) {
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'data');
+        }
+
+        if ($value !== [] && array_is_list($value)) {
+            return (object) $value;
         }
 
         /** @var array<string, mixed> $value */

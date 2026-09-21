@@ -129,10 +129,18 @@ final readonly class NotificationOutcome implements JsonSerializable
 
     /**
      * The receipt ID of an accepted notification, or null.
+     *
+     * The answer needs both halves of the evidence: an accepted outcome and a
+     * ticket that reports success. An error ticket never gives an ID back, even
+     * when it carries one.
      */
     public function receiptId(): ?string
     {
-        return $this->isAccepted() ? $this->ticket?->id : null;
+        if (!$this->isAccepted() || $this->ticket?->isOk() !== true) {
+            return null;
+        }
+
+        return $this->ticket->id;
     }
 
     /**
@@ -209,7 +217,11 @@ final readonly class NotificationOutcome implements JsonSerializable
 
         $ticket = self::readTicket($data);
         $reason = self::readReason($data);
-        $recovery = array_key_exists('recovery', $data) && $data['recovery'] !== null
+
+        // A stored field that is present must be valid. Only a field that no
+        // writer of this SDK emitted may fall back to the careful value, and an
+        // explicit null is not that: it is a broken field.
+        $recovery = array_key_exists('recovery', $data)
             ? self::requiredEnum($data, 'recovery', RecoveryDisposition::class)
             : null;
 
@@ -251,22 +263,31 @@ final readonly class NotificationOutcome implements JsonSerializable
      */
     private static function carefulRecovery(Acceptance $acceptance, ?PushTicket $ticket): RecoveryDisposition
     {
+        if (!self::closedByEvidence($acceptance, $ticket)) {
+            return RecoveryDisposition::NeedsIntervention;
+        }
+
+        return RecoveryDisposition::None;
+    }
+
+    /**
+     * True when the evidence itself says that nothing is left to send again.
+     *
+     * Expo accepted the notification, or Expo refused this one device for a
+     * reason that no repeat of the same message can pass. A credential failure
+     * is not such a reason: the token stays valid, and the work waits for a fix.
+     */
+    private static function closedByEvidence(Acceptance $acceptance, ?PushTicket $ticket): bool
+    {
         if ($acceptance === Acceptance::Accepted) {
-            return RecoveryDisposition::None;
+            return true;
         }
 
-        // Only Expo itself closes a notification with a rejection, and only when
-        // the code says that a later send cannot work.
-        if (
-            $acceptance === Acceptance::NotAccepted
-            && $ticket !== null
-            && $ticket->isError()
-            && $ticket->classification()?->maySucceedLater() === false
-        ) {
-            return RecoveryDisposition::None;
+        if ($acceptance !== Acceptance::NotAccepted || $ticket === null || !$ticket->isError()) {
+            return false;
         }
 
-        return RecoveryDisposition::NeedsIntervention;
+        return RecoveryDisposition::forClassification($ticket->classification()) === RecoveryDisposition::None;
     }
 
     /**
@@ -319,6 +340,21 @@ final readonly class NotificationOutcome implements JsonSerializable
             throw new InvalidStorageException(sprintf(
                 'The stored %s holds a ticket of another device. The association is broken.',
                 self::STORAGE_TYPE
+            ));
+        }
+
+        // The disposition may not claim less than the evidence demands. A
+        // closed disposition on unresolved work would drop that work out of
+        // every recovery list in silence.
+        $closed = self::closedByEvidence($this->acceptance, $this->ticket);
+
+        if ($closed !== !$this->recovery->isOpen()) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s is "%s" with the recovery "%s". The evidence says that the work is %s.',
+                self::STORAGE_TYPE,
+                $this->acceptance->value,
+                $this->recovery->value,
+                $closed ? 'finished' : 'open'
             ));
         }
     }

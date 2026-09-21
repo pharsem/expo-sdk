@@ -214,6 +214,8 @@ final readonly class SendResult implements JsonSerializable
         }
 
         foreach ($this->outcomes as $outcome) {
+            // receiptId() already demands a ticket that reports success, so
+            // this covers both halves of the evidence.
             if (!$outcome->isAccepted() || $outcome->receiptId() === null) {
                 return false;
             }
@@ -239,12 +241,26 @@ final readonly class SendResult implements JsonSerializable
     }
 
     /**
-     * True when anything at all is unresolved: a request failure, an unknown
-     * acceptance, or work that the SDK never tried.
+     * True when anything at all is unresolved.
+     *
+     * The answer reads the same rule as `recoverable()`, so the two can never
+     * disagree. A request failure counts. So does an open notification without
+     * one: Expo can refuse a single device with `MessageRateExceeded`, and that
+     * notification still needs a decision.
      */
     public function needsAttention(): bool
     {
-        return $this->requestFailures !== [] || $this->unknown() !== [] || $this->notAttempted() !== [];
+        if ($this->requestFailures !== []) {
+            return true;
+        }
+
+        foreach ($this->outcomes as $outcome) {
+            if ($outcome->isOpen()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -335,7 +351,7 @@ final readonly class SendResult implements JsonSerializable
     {
         $data = StorageEnvelope::unwrap(self::STORAGE_TYPE, $stored);
 
-        return new self(
+        $result = new self(
             outcomes: array_map(
                 static fn (array $entry): NotificationOutcome => NotificationOutcome::fromStorageArray($entry),
                 StorageEnvelope::listOfArrays(self::STORAGE_TYPE, $data, 'outcomes')
@@ -347,6 +363,50 @@ final readonly class SendResult implements JsonSerializable
             uncorrelatedIds: StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'uncorrelatedIds'),
             warnings: StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'warnings'),
         );
+
+        $result->assertFailuresMatchOutcomes();
+
+        return $result;
+    }
+
+    /**
+     * Refuses an outcome that points at evidence which is not there.
+     *
+     * One outcome names the request failure that explains it, by position. A
+     * position outside the list, or a failure that never held this
+     * notification, means that the two lists do not belong together.
+     *
+     * @throws InvalidStorageException
+     */
+    private function assertFailuresMatchOutcomes(): void
+    {
+        $count = count($this->requestFailures);
+
+        foreach ($this->outcomes as $outcome) {
+            $index = $outcome->failureIndex;
+
+            if ($index === null) {
+                continue;
+            }
+
+            if ($index >= $count) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s has an outcome at index %d that points at request failure %d of %d.',
+                    self::STORAGE_TYPE,
+                    $outcome->index,
+                    $index,
+                    $count
+                ));
+            }
+
+            if (!in_array($outcome->index, $this->requestFailures[$index]->indexes, true)) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s has an outcome at index %d whose request failure never held it.',
+                    self::STORAGE_TYPE,
+                    $outcome->index
+                ));
+            }
+        }
     }
 
     /**

@@ -474,7 +474,7 @@ final readonly class ReceiptResult implements JsonSerializable
     {
         $data = StorageEnvelope::unwrap(self::STORAGE_TYPE, $stored);
 
-        return new self(
+        $result = new self(
             entries: array_map(
                 static fn (array $entry): ReceiptEntry => ReceiptEntry::fromStorageArray($entry),
                 StorageEnvelope::listOfArrays(self::STORAGE_TYPE, $data, 'entries')
@@ -487,6 +487,46 @@ final readonly class ReceiptResult implements JsonSerializable
             warnings: StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'warnings'),
             conflicts: StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'conflicts'),
         );
+
+        $result->assertFailuresMatchEntries();
+
+        return $result;
+    }
+
+    /**
+     * Refuses an entry that points at evidence which is not there.
+     *
+     * @throws InvalidStorageException
+     */
+    private function assertFailuresMatchEntries(): void
+    {
+        $count = count($this->requestFailures);
+
+        foreach ($this->entries as $entry) {
+            $index = $entry->failureIndex;
+
+            if ($index === null) {
+                continue;
+            }
+
+            if ($index >= $count) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s has the entry "%s" that points at request failure %d of %d.',
+                    self::STORAGE_TYPE,
+                    $entry->id,
+                    $index,
+                    $count
+                ));
+            }
+
+            if (!in_array($entry->id, $this->requestFailures[$index]->ids, true)) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s has the entry "%s" whose request failure never asked about it.',
+                    self::STORAGE_TYPE,
+                    $entry->id
+                ));
+            }
+        }
     }
 
     /**
@@ -571,14 +611,28 @@ final readonly class ReceiptResult implements JsonSerializable
     /**
      * True when two receipts say the same thing about the same notification.
      *
-     * The comparison reads the structured details as well. A detail that
-     * changed is a real contradiction, and the order of the keys inside the
-     * details is not.
+     * The comparison reads four things: the status, the error code, the message
+     * and the structured details. A detail that changed is a real
+     * contradiction, and the order of the keys inside the details is not. The
+     * details arrive as the SDK stored them, so a nested empty object and a
+     * nested empty list are already the same value by then.
+     *
+     * The device counts as well. Two answers that give one receipt ID two
+     * different devices contradict each other. One answer that knows the device
+     * and one that does not agree: the known token only adds what the other one
+     * lacks.
      */
     private static function sameReceipt(?PushReceipt $first, ?PushReceipt $second): bool
     {
         if ($first === null || $second === null) {
             return $first === $second;
+        }
+
+        $firstToken = $first->token;
+        $secondToken = $second->token;
+
+        if ($firstToken !== null && $secondToken !== null && $firstToken->value !== $secondToken->value) {
+            return false;
         }
 
         return $first->status === $second->status

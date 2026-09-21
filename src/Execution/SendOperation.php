@@ -331,17 +331,18 @@ final readonly class SendOperation
     /**
      * What one rejected ticket leaves open.
      *
-     * Expo answers with an error code for this one device. The code decides:
-     * `MessageRateExceeded` can pass later, `DeviceNotRegistered` never can, and
-     * a code that the SDK does not know says nothing either way.
+     * Expo answers with an error code for this one device, and the code decides:
+     *
+     * - `MessageRateExceeded` can pass later on its own.
+     * - A credential error needs a fix in the Expo dashboard first. The token
+     *   stays valid, so the work stays open.
+     * - `DeviceNotRegistered` and `MessageTooBig` close the work. No repeat of
+     *   the same message to the same device can pass.
+     * - A code that the SDK does not know says nothing either way.
      */
     private static function ticketRecovery(PushTicket $ticket): RecoveryDisposition
     {
-        return match ($ticket->classification()?->maySucceedLater()) {
-            true => RecoveryDisposition::Retryable,
-            false => RecoveryDisposition::None,
-            null => RecoveryDisposition::NeedsIntervention,
-        };
+        return RecoveryDisposition::forClassification($ticket->classification());
     }
 
     private function outcomeFor(

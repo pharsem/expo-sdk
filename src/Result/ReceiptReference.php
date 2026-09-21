@@ -74,6 +74,20 @@ final readonly class ReceiptReference implements JsonSerializable
         $index = $data['notificationIndex'] ?? null;
         $reference = $data['reference'] ?? null;
 
+        // A present field of the wrong type is broken data, not an absent one.
+        // A correlation that quietly turns into null points at nothing.
+        if ($token !== null && (!is_string($token) || $token === '')) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'token');
+        }
+
+        if ($index !== null && (!is_int($index) || $index < 0)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'notificationIndex');
+        }
+
+        if ($reference !== null && !is_string($reference)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'reference');
+        }
+
         return new self(
             id: $id,
             token: is_string($token) ? new PushToken($token) : null,
