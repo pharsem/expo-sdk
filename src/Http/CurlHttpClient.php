@@ -232,10 +232,7 @@ final class CurlHttpClient implements ConcurrentHttpClient
     {
         $this->cancelAll();
 
-        foreach ($this->idle as $handle) {
-            curl_close($handle);
-        }
-
+        // Dropping the references frees every handle and closes its connections.
         $this->idle = [];
 
         if ($this->multi !== null) {
@@ -336,11 +333,11 @@ final class CurlHttpClient implements ConcurrentHttpClient
 
         if (count($this->idle) <= self::MAX_CONCURRENCY) {
             $this->idle[] = $handle;
-
-            return;
         }
 
-        curl_close($handle);
+        // A handle that the pool does not keep goes out of scope here. PHP frees
+        // it, and it closes its connections. The SDK never calls curl_close():
+        // PHP 8.5 deprecates that function for exactly this reason.
     }
 
     private function configure(CurlHandle $handle, HttpRequest $request, HeaderBuffer $buffer): void
