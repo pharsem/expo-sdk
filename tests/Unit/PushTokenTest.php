@@ -35,6 +35,10 @@ final class PushTokenTest extends TestCase
             ['ExponentPushToken[]'],
             ['ExponentPushToken[abc'],
             ['fcm-token-from-another-service'],
+            ['ExponentPushToken[with space]'],
+            ['ExponentPushToken[abc]extra'],
+            ['prefix ExponentPushToken[abc]'],
+            ['f5e9a0a6-0e4c-4b0c-8e4e'],
         ];
     }
 
@@ -61,6 +65,51 @@ final class PushTokenTest extends TestCase
         $token = new PushToken("  ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]\n");
 
         self::assertSame('ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]', $token->value);
+    }
+
+    public function testItNeverChangesTheCaseOfTheOpaquePart(): void
+    {
+        $mixed = 'ExponentPushToken[AbCdEfGhIjKlMnOpQrStUv]';
+
+        self::assertSame($mixed, (new PushToken($mixed))->value);
+        self::assertSame($mixed, (string) PushToken::from($mixed));
+    }
+
+    public function testTheFingerprintIsStableAndHidesTheToken(): void
+    {
+        $token = new PushToken('ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]');
+        $same = new PushToken('ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]');
+        $other = new PushToken('ExponentPushToken[bbbbbbbbbbbbbbbbbbbbbb]');
+
+        self::assertSame($token->fingerprint(), $same->fingerprint());
+        self::assertNotSame($token->fingerprint(), $other->fingerprint());
+        self::assertStringNotContainsString('aaaaaaaa', $token->fingerprint());
+        self::assertStringStartsWith('tok_', $token->fingerprint());
+    }
+
+    public function testAValidShapeSaysNothingAboutRegistration(): void
+    {
+        // The SDK cannot know whether a device still accepts notifications. Only
+        // a DeviceNotRegistered ticket or receipt says that.
+        self::assertTrue(PushToken::isValid('ExponentPushToken[deleted-app-000000]'));
+    }
+
+    public function testTheHelperAndTheConstructorAgree(): void
+    {
+        $values = [
+            '  ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]  ',
+            'ExponentPushToken[]',
+            '',
+            "	ExpoPushToken[yyyy]
+",
+        ];
+
+        foreach ($values as $value) {
+            $valid = PushToken::isValid($value);
+
+            self::assertSame($valid, PushToken::tryFrom($value) instanceof PushToken, $value);
+            self::assertSame($valid, \Expo\Push\Expo::isExpoPushToken($value), $value);
+        }
     }
 
     public function testItComparesAndCastsToString(): void

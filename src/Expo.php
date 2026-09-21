@@ -4,456 +4,409 @@ declare(strict_types=1);
 
 namespace Expo\Push;
 
-use Expo\Push\Exception\ExpoApiException;
+use Expo\Push\Exception\InvalidConfigurationException;
 use Expo\Push\Exception\InvalidMessageException;
 use Expo\Push\Exception\MessageTooLargeException;
-use Expo\Push\Exception\TransportException;
+use Expo\Push\Execution\ConcurrentDispatcher;
+use Expo\Push\Execution\Dispatcher;
+use Expo\Push\Execution\ReceiptOperation;
+use Expo\Push\Execution\SendOperation;
+use Expo\Push\Execution\SequentialDispatcher;
+use Expo\Push\Http\ConcurrentHttpClient;
 use Expo\Push\Http\CurlHttpClient;
 use Expo\Push\Http\HttpClient;
-use Expo\Push\Http\HttpResponse;
+use Expo\Push\Http\RequestFactory;
+use Expo\Push\Observability\NullObserver;
+use Expo\Push\Observability\Observer;
+use Expo\Push\Observability\SafeObserver;
+use Expo\Push\Plan\Planner;
+use Expo\Push\RateLimit\NullRateLimiter;
+use Expo\Push\RateLimit\RateLimiter;
+use Expo\Push\Result\ReceiptResult;
+use Expo\Push\Result\ReceiptReference;
+use Expo\Push\Result\SendResult;
+use Expo\Push\Retry\DeliveryRetryPolicy;
+use Expo\Push\Retry\RetryEngine;
+use Expo\Push\Retry\RetryPolicy;
+use Expo\Push\Support\Clock;
+use Expo\Push\Support\FullJitter;
+use Expo\Push\Support\Jitter;
+use Expo\Push\Support\Sleeper;
+use Expo\Push\Support\SystemClock;
+use Expo\Push\Support\SystemSleeper;
+use Generator;
+use stdClass;
 
 /**
  * The client of the Expo push notification service.
  *
  * ```php
  * $expo = new Expo();
- * $tickets = $expo->notify($token, 'Hello', 'World');
+ * $result = $expo->notify($token, 'Hello', 'World');
+ *
+ * foreach ($result->accepted() as $outcome) {
+ *     $store->save($outcome->receiptId());
+ * }
  * ```
  *
- * The client splits large sends into chunks, retries a rate limited request, and
- * maps every ticket and every receipt back to the device token.
+ * `send()` and `receipts()` return a structured result. They do not raise for an
+ * operational failure, so a later chunk can never take the earlier answers with
+ * it. Invalid input and invalid settings still raise, before any request.
+ *
+ * Three milestones, and only the first two exist in the API:
+ *
+ * 1. Expo accepted the notification. That is a ticket with the status `ok`.
+ * 2. Apple or Google took the notification. That is a receipt with `ok`.
+ * 3. The device showed the notification. Nothing reports this.
  */
 final readonly class Expo
 {
-    public const string VERSION = '1.0.0';
+    public const string VERSION = '2.0.0';
 
     /**
-     * The largest number of notifications in one send request.
+     * The largest number of notifications in one send request, from the Expo API
+     * documentation.
      */
     public const int MESSAGE_CHUNK_LIMIT = 100;
 
     /**
-     * The largest number of receipt IDs in one receipt request.
+     * The largest number of receipt IDs in one lookup request, from the Expo API
+     * documentation.
      */
-    public const int RECEIPT_CHUNK_LIMIT = 300;
-
-    private const string SEND_PATH = '/--/api/v2/push/send';
-
-    private const string RECEIPTS_PATH = '/--/api/v2/push/getReceipts';
-
-    private const int GZIP_THRESHOLD = 1024;
+    public const int RECEIPT_CHUNK_LIMIT = 1_000;
 
     /**
-     * The SDK never waits longer than this between two tries.
+     * The largest concurrency that this SDK supports. It is a choice of this SDK,
+     * not a limit of the Expo service.
      */
-    private const int MAX_RETRY_DELAY_MS = 60_000;
+    public const int MAX_CONCURRENCY = 6;
 
     private HttpClient $httpClient;
 
+    private RetryPolicy $retryPolicy;
+
+    private RetryEngine $engine;
+
+    private RateLimiter $rateLimiter;
+
+    private string $bucket;
+
+    private Clock $clock;
+
+    private Sleeper $sleeper;
+
+    private SafeObserver $observer;
+
+    private RequestFactory $requests;
+
     /**
-     * @param string|null     $accessToken  the Expo access token, needed when the project uses enhanced security
-     * @param HttpClient|null $httpClient   your own HTTP client. The default one uses cURL
-     * @param int             $maxRetries   the number of retries after a 429 or a 5xx answer
-     * @param int             $retryDelayMs the first backoff delay in milliseconds. It doubles for each retry
-     * @param bool            $compress     compresses a body above 1024 bytes with gzip
-     * @param bool            $validateSize checks the 4096 byte limit before the send
-     * @param string          $baseUrl      the API host. Change it only for a test server
+     * @param string|null       $accessToken          the Expo access token, needed when the project uses enhanced security
+     * @param HttpClient|null   $httpClient           your own transport. The default one uses cURL
+     * @param RetryPolicy|null  $retryPolicy          the retry rules. The default is `DeliveryRetryPolicy`
+     * @param int               $concurrency          requests in flight, 1 to 6. The default is 1
+     * @param RateLimiter|null  $rateLimiter          an optional notification limiter for the sends. Off by default
+     * @param string|null       $rateLimitBucket      the project key of the limiter. Required with a limiter
+     * @param Observer|null     $observer             an optional watcher for the lifecycle events
+     * @param bool              $compress             gzip for a body above 1024 bytes, when zlib is available
+     * @param bool              $validateSize         checks the 4096 byte estimate before the send
+     * @param bool              $continueAfterFailure activates later chunks after a chunk failed
+     * @param int|null          $operationDeadlineMs  bounds the whole operation. Off by default
+     * @param bool              $enforceHardDeadline  demands a transport that can stop a running request
+     * @param int               $sendChunkSize        notifications in one send request, at most 100
+     * @param int               $receiptChunkSize     IDs in one lookup request, at most 1000
+     * @param string            $baseUrl              the API host. Change it only for a test server
+     * @param Clock|null        $clock                the clock. Inject a `FrozenClock` in a test
+     * @param Sleeper|null      $sleeper              the sleeper. Inject a `RecordingSleeper` in a test
+     * @param Jitter|null       $jitter               the backoff jitter. Inject a `FixedJitter` in a test
+     *
+     * @throws InvalidConfigurationException when a setting cannot work
      */
     public function __construct(
         private ?string $accessToken = null,
         ?HttpClient $httpClient = null,
-        private int $maxRetries = 2,
-        private int $retryDelayMs = 1000,
+        ?RetryPolicy $retryPolicy = null,
+        private int $concurrency = 1,
+        ?RateLimiter $rateLimiter = null,
+        ?string $rateLimitBucket = null,
+        ?Observer $observer = null,
         private bool $compress = true,
         private bool $validateSize = true,
+        private bool $continueAfterFailure = false,
+        private ?int $operationDeadlineMs = null,
+        bool $enforceHardDeadline = false,
+        private int $sendChunkSize = self::MESSAGE_CHUNK_LIMIT,
+        private int $receiptChunkSize = self::RECEIPT_CHUNK_LIMIT,
         private string $baseUrl = 'https://exp.host',
+        ?Clock $clock = null,
+        ?Sleeper $sleeper = null,
+        ?Jitter $jitter = null,
     ) {
         $this->httpClient = $httpClient ?? new CurlHttpClient();
+        $this->retryPolicy = $retryPolicy ?? new DeliveryRetryPolicy();
+        $this->rateLimiter = $rateLimiter ?? new NullRateLimiter();
+        $this->clock = $clock ?? new SystemClock();
+        $this->sleeper = $sleeper ?? new SystemSleeper();
+        $this->observer = new SafeObserver($observer ?? new NullObserver());
+        $this->engine = new RetryEngine($this->retryPolicy, $jitter ?? new FullJitter());
+
+        $capabilities = $this->httpClient->capabilities();
+
+        if ($concurrency < 1 || $concurrency > self::MAX_CONCURRENCY) {
+            throw new InvalidConfigurationException(sprintf(
+                'The concurrency must be between 1 and %d. It is %d.',
+                self::MAX_CONCURRENCY,
+                $concurrency
+            ));
+        }
+
+        if ($concurrency > $capabilities->maxConcurrency) {
+            throw new InvalidConfigurationException(sprintf(
+                'The transport %s runs at most %d request(s) at one time, and the concurrency is %d.',
+                $this->httpClient::class,
+                $capabilities->maxConcurrency,
+                $concurrency
+            ));
+        }
+
+        if ($concurrency > 1 && !$this->httpClient instanceof ConcurrentHttpClient) {
+            throw new InvalidConfigurationException(sprintf(
+                'The transport %s does not implement ConcurrentHttpClient, so it cannot run %d requests at one time.',
+                $this->httpClient::class,
+                $concurrency
+            ));
+        }
+
+        if ($enforceHardDeadline && !$capabilities->canEnforceHardDeadline) {
+            throw new InvalidConfigurationException(sprintf(
+                'The transport %s cannot stop a request that is already running, so it cannot enforce a hard '
+                . 'deadline. Set the timeout on your own client, and leave enforceHardDeadline off.',
+                $this->httpClient::class
+            ));
+        }
+
+        if ($enforceHardDeadline && $operationDeadlineMs === null) {
+            throw new InvalidConfigurationException(
+                'enforceHardDeadline needs an operationDeadlineMs value.'
+            );
+        }
+
+        if ($operationDeadlineMs !== null && $operationDeadlineMs < 1) {
+            throw new InvalidConfigurationException('The operation deadline must be 1 millisecond or more.');
+        }
+
+        if ($sendChunkSize < 1 || $sendChunkSize > self::MESSAGE_CHUNK_LIMIT) {
+            throw new InvalidConfigurationException(sprintf(
+                'The send chunk size must be between 1 and %d. Expo accepts no more.',
+                self::MESSAGE_CHUNK_LIMIT
+            ));
+        }
+
+        if ($receiptChunkSize < 1 || $receiptChunkSize > self::RECEIPT_CHUNK_LIMIT) {
+            throw new InvalidConfigurationException(sprintf(
+                'The receipt chunk size must be between 1 and %d. Expo accepts no more.',
+                self::RECEIPT_CHUNK_LIMIT
+            ));
+        }
+
+        if ($rateLimiter !== null && ($rateLimitBucket === null || trim($rateLimitBucket) === '')) {
+            throw new InvalidConfigurationException(
+                'A rate limiter needs a rateLimitBucket. Use the Expo project as the key. The SDK never reads a '
+                . 'project out of a push token.'
+            );
+        }
+
+        $capacity = $this->rateLimiter->capacity();
+
+        if ($capacity !== null && $sendChunkSize > $capacity) {
+            throw new InvalidConfigurationException(sprintf(
+                'A send chunk of %d notifications can never fit the limiter capacity of %d. Lower the chunk size '
+                . 'or raise the limit.',
+                $sendChunkSize,
+                $capacity
+            ));
+        }
+
+        $this->bucket = $rateLimitBucket ?? 'default';
+
+        $settings = $this->retryPolicy->settings();
+
+        $this->requests = new RequestFactory(
+            baseUrl: $baseUrl,
+            accessToken: $accessToken,
+            userAgent: 'expo-sdk-php/' . self::VERSION,
+            compress: $compress,
+            connectTimeoutMs: $settings->connectTimeoutMs,
+            requestTimeoutMs: $settings->requestTimeoutMs,
+            transportDecodes: $capabilities->decompressesResponses,
+        );
     }
 
     /**
-     * Sends one message, or many messages, and returns one ticket for each device.
+     * Sends one message, or many messages, and returns one outcome for each
+     * message and device pair.
      *
-     * The client sends as many requests as it needs. The tickets come back in the
-     * order of the devices.
+     * The SDK normalizes and checks the whole input before the first request, so
+     * an invalid message in the last chunk raises before the first chunk goes out.
      *
-     * @param PushMessage|iterable<PushMessage> $messages
+     * @param PushMessage|iterable<array-key, PushMessage> $messages
      *
-     * @throws MessageTooLargeException when a message is above 4096 bytes
-     * @throws ExpoApiException         when Expo rejects the whole request
-     * @throws TransportException       when the SDK cannot reach Expo
+     * @throws InvalidMessageException  when an item is not a message, a reference repeats, or a value is not JSON
+     * @throws MessageTooLargeException when a message is above 4096 bytes and the size check is on
      */
-    #[\NoDiscard('Read the tickets. A device can fail while the request succeeds.')]
-    public function send(PushMessage|iterable $messages): TicketCollection
+    #[\NoDiscard('Read the result. It says what Expo accepted and what stays unknown.')]
+    public function send(PushMessage|iterable $messages): SendResult
     {
-        $tickets = new TicketCollection();
+        $plan = Planner::plan($messages, $this->validateSize, PushMessage::MAX_SIZE);
 
-        foreach (self::chunk($messages) as $chunk) {
-            $tickets = $tickets->merge($this->sendChunk($chunk));
+        if ($plan->isEmpty()) {
+            return new SendResult();
         }
 
-        return $tickets;
+        $operation = new SendOperation(
+            plan: $plan,
+            chunks: $plan->chunks($this->sendChunkSize),
+            requests: $this->requests,
+            engine: $this->engine,
+            dispatcher: $this->dispatcher(),
+            clock: $this->clock,
+            sleeper: $this->sleeper,
+            limiter: $this->rateLimiter,
+            bucket: $this->bucket,
+            observer: $this->observer,
+            operationId: self::operationId(),
+            continueAfterFailure: $this->continueAfterFailure,
+            operationDeadlineMs: $this->operationDeadlineMs,
+        );
+
+        return $operation->run();
     }
 
     /**
      * Sends a simple notification to one or more devices.
      *
      * @param PushToken|string|iterable<PushToken|string> $to
-     * @param array<string, mixed>                        $data
+     * @param array<string, mixed>|stdClass|null         $data
      *
-     * @throws MessageTooLargeException when the message is above 4096 bytes
-     * @throws ExpoApiException         when Expo rejects the whole request
-     * @throws TransportException       when the SDK cannot reach Expo
+     * @throws InvalidMessageException
+     * @throws MessageTooLargeException
      */
-    #[\NoDiscard('Read the tickets. A device can fail while the request succeeds.')]
+    #[\NoDiscard('Read the result. It says what Expo accepted and what stays unknown.')]
     public function notify(
         PushToken|string|iterable $to,
         string $title,
         ?string $body = null,
-        array $data = [],
-    ): TicketCollection {
+        array|stdClass|null $data = null,
+        ?string $reference = null,
+    ): SendResult {
         return $this->send(new PushMessage(
             to: $to,
             title: $title,
             body: $body,
-            data: $data === [] ? null : $data,
+            data: $data,
+            reference: $reference,
         ));
     }
 
     /**
-     * Reads the delivery result of earlier tickets.
+     * Reads the handoff result of earlier tickets.
      *
-     * Wait about 15 minutes after the send. Expo keeps a receipt for 24 hours.
-     * Pass the tickets to get the device token on each receipt.
+     * Read the receipts some minutes after the send. Expo keeps a receipt for a
+     * limited time only, so a missing receipt can also mean an expired one.
      *
-     * @param TicketCollection|PushTicket|string|iterable<PushTicket|string> $tickets
+     * Accepts a `SendResult`, a `TicketCollection`, single tickets, receipt
+     * references, raw ID strings, or any iterable of those.
      *
-     * @throws ExpoApiException   when Expo rejects the whole request
-     * @throws TransportException when the SDK cannot reach Expo
+     * @param SendResult|TicketCollection|PushTicket|ReceiptReference|string|iterable<mixed> $tickets
+     *
+     * @throws InvalidMessageException when an item is not usable, or two items give one ID two devices
      */
-    #[\NoDiscard('Read the receipts. They hold the delivery result.')]
-    public function receipts(TicketCollection|PushTicket|string|iterable $tickets): ReceiptCollection
-    {
-        $tokensById = [];
-        $ids = [];
+    #[\NoDiscard('Read the result. It says which IDs came back and which did not.')]
+    public function receipts(
+        SendResult|TicketCollection|PushTicket|ReceiptReference|string|iterable $tickets,
+    ): ReceiptResult {
+        $plan = Planner::planReceipts($tickets);
 
-        foreach (self::toTicketList($tickets) as $ticket) {
-            if (is_string($ticket)) {
-                $ids[$ticket] = true;
-
-                continue;
-            }
-
-            if ($ticket->id === null) {
-                continue;
-            }
-
-            $ids[$ticket->id] = true;
-
-            if ($ticket->token !== null) {
-                $tokensById[$ticket->id] = $ticket->token;
-            }
+        if ($plan->isEmpty()) {
+            return new ReceiptResult();
         }
 
-        $ids = array_keys($ids);
-        $receipts = new ReceiptCollection();
+        $operation = new ReceiptOperation(
+            plan: $plan,
+            chunks: $plan->chunks($this->receiptChunkSize),
+            requests: $this->requests,
+            engine: $this->engine,
+            dispatcher: $this->dispatcher(),
+            clock: $this->clock,
+            sleeper: $this->sleeper,
+            bucket: $this->bucket,
+            observer: $this->observer,
+            operationId: self::operationId(),
+            continueAfterFailure: $this->continueAfterFailure,
+            operationDeadlineMs: $this->operationDeadlineMs,
+        );
 
-        foreach (array_chunk($ids, self::RECEIPT_CHUNK_LIMIT) as $chunk) {
-            $receipts = $receipts->merge($this->receiptChunk($chunk, $tokensById));
-        }
-
-        return $receipts;
+        return $operation->run();
     }
 
     /**
      * Groups messages into chunks that fit one request.
      *
-     * A message with more devices than the limit becomes several messages. Use this
-     * method to put one chunk on a queue for each job.
+     * A message with more devices than the limit becomes several messages. Put
+     * one chunk on a queue for each job, and store each message with
+     * `PushMessage::toStorageArray()`.
      *
-     * @param PushMessage|iterable<PushMessage> $messages
+     * This helper does no whole operation check. A broken message in a later
+     * chunk shows up only when that chunk runs. `send()` checks everything first.
+     *
+     * @param PushMessage|iterable<array-key, PushMessage> $messages
      *
      * @return list<list<PushMessage>>
      */
     #[\NoDiscard]
     public static function chunk(PushMessage|iterable $messages, int $limit = self::MESSAGE_CHUNK_LIMIT): array
     {
-        if ($limit < 1) {
-            throw new InvalidMessageException('The chunk limit must be one or more.');
-        }
+        return iterator_to_array(Planner::lazyChunks($messages, $limit), false);
+    }
 
-        $chunks = [];
-        $current = [];
-        $room = $limit;
-
-        foreach (self::toMessageList($messages) as $message) {
-            $tokens = $message->to;
-            $total = count($tokens);
-            $offset = 0;
-
-            while ($offset < $total) {
-                if ($room === 0) {
-                    $chunks[] = $current;
-                    $current = [];
-                    $room = $limit;
-                }
-
-                $take = min($room, $total - $offset);
-                $current[] = $take === $total
-                    ? $message
-                    : $message->recipients(array_slice($tokens, $offset, $take));
-
-                $offset += $take;
-                $room -= $take;
-            }
-        }
-
-        if ($current !== []) {
-            $chunks[] = $current;
-        }
-
-        return $chunks;
+    /**
+     * The same split as `chunk()`, one chunk at a time.
+     *
+     * Use it for an input that does not fit in memory. The generator reads your
+     * input as it goes, so nothing holds the whole operation.
+     *
+     * @param PushMessage|iterable<array-key, PushMessage> $messages
+     *
+     * @return Generator<int, list<PushMessage>>
+     */
+    #[\NoDiscard]
+    public static function lazyChunks(
+        PushMessage|iterable $messages,
+        int $limit = self::MESSAGE_CHUNK_LIMIT,
+    ): Generator {
+        return Planner::lazyChunks($messages, $limit);
     }
 
     /**
      * True when the value looks like an Expo push token.
+     *
+     * A valid shape says nothing about registration.
      */
     public static function isExpoPushToken(string $value): bool
     {
         return PushToken::isValid($value);
     }
 
-    /**
-     * @param list<PushMessage> $messages
-     */
-    private function sendChunk(array $messages): TicketCollection
+    private function dispatcher(): Dispatcher
     {
-        $payload = [];
-        $tokens = [];
-
-        foreach ($messages as $message) {
-            if ($this->validateSize && $message->sizeInBytes() > PushMessage::MAX_SIZE) {
-                throw new MessageTooLargeException($message->sizeInBytes(), PushMessage::MAX_SIZE);
-            }
-
-            $payload[] = $message->jsonSerialize();
-
-            foreach ($message->to as $token) {
-                $tokens[] = $token;
-            }
+        if ($this->concurrency > 1 && $this->httpClient instanceof ConcurrentHttpClient) {
+            return new ConcurrentDispatcher($this->httpClient, $this->concurrency);
         }
 
-        $body = $this->request($this->baseUrl . self::SEND_PATH, $payload);
-        $data = $body['data'] ?? null;
-
-        if (!is_array($data)) {
-            throw new TransportException('Expo answered the send request without a data array.');
-        }
-
-        $tickets = [];
-
-        foreach (array_values($data) as $index => $entry) {
-            $tickets[] = PushTicket::fromArray(
-                is_array($entry) ? $entry : [],
-                $tokens[$index] ?? null
-            );
-        }
-
-        return new TicketCollection($tickets);
+        return new SequentialDispatcher($this->httpClient);
     }
 
-    /**
-     * @param list<string>            $ids
-     * @param array<string, PushToken> $tokensById
-     */
-    private function receiptChunk(array $ids, array $tokensById): ReceiptCollection
+    private static function operationId(): string
     {
-        if ($ids === []) {
-            return new ReceiptCollection();
-        }
-
-        $body = $this->request($this->baseUrl . self::RECEIPTS_PATH, ['ids' => $ids]);
-        $data = $body['data'] ?? null;
-
-        if (!is_array($data)) {
-            throw new TransportException('Expo answered the receipt request without a data object.');
-        }
-
-        $receipts = [];
-
-        foreach ($data as $id => $entry) {
-            $id = (string) $id;
-            $receipts[] = PushReceipt::fromArray(
-                $id,
-                is_array($entry) ? $entry : [],
-                $tokensById[$id] ?? null
-            );
-        }
-
-        return new ReceiptCollection($receipts, $ids);
-    }
-
-    /**
-     * @param array<array-key, mixed> $payload
-     *
-     * @return array<string, mixed>
-     */
-    private function request(string $url, array $payload): array
-    {
-        $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-        if ($json === false) {
-            throw new InvalidMessageException('The SDK could not encode the request: ' . json_last_error_msg());
-        }
-
-        $headers = [
-            'accept' => 'application/json',
-            'accept-encoding' => 'gzip, deflate',
-            'content-type' => 'application/json',
-            'user-agent' => 'expo-sdk-php/' . self::VERSION,
-        ];
-
-        if ($this->accessToken !== null && $this->accessToken !== '') {
-            $headers['authorization'] = 'Bearer ' . $this->accessToken;
-        }
-
-        if ($this->compress && strlen($json) > self::GZIP_THRESHOLD && function_exists('gzencode')) {
-            $compressed = gzencode($json, 6);
-
-            if (is_string($compressed)) {
-                $json = $compressed;
-                $headers['content-encoding'] = 'gzip';
-            }
-        }
-
-        $response = $this->sendWithRetries($url, $json, $headers);
-
-        return $this->decode($response);
-    }
-
-    /**
-     * @param array<string, string> $headers
-     */
-    private function sendWithRetries(string $url, string $body, array $headers): HttpResponse
-    {
-        $attempt = 0;
-
-        while (true) {
-            $response = $this->httpClient->post($url, $body, $headers);
-
-            if (!self::isRetryable($response) || $attempt >= $this->maxRetries) {
-                return $response;
-            }
-
-            $this->wait($attempt, $response->retryAfter());
-            ++$attempt;
-        }
-    }
-
-    private static function isRetryable(HttpResponse $response): bool
-    {
-        return $response->status === 429 || $response->status >= 500;
-    }
-
-    private function wait(int $attempt, ?int $retryAfterSeconds): void
-    {
-        $milliseconds = $retryAfterSeconds !== null
-            ? $retryAfterSeconds * 1000
-            : $this->retryDelayMs * (1 << min($attempt, 16));
-
-        $milliseconds = min($milliseconds, self::MAX_RETRY_DELAY_MS);
-
-        if ($milliseconds > 0) {
-            usleep($milliseconds * 1000);
-        }
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function decode(HttpResponse $response): array
-    {
-        $body = json_decode($response->body, true);
-
-        if (!is_array($body)) {
-            throw new TransportException(sprintf(
-                'Expo answered with status %d and a body that is not JSON: %s',
-                $response->status,
-                self::snippet($response->body)
-            ));
-        }
-
-        $errors = $body['errors'] ?? null;
-
-        if (is_array($errors) && $errors !== []) {
-            /** @var list<array{code?: string, message?: string, details?: mixed}> $errors */
-            throw ExpoApiException::fromErrors(array_values($errors), $response->status);
-        }
-
-        if (!$response->isSuccessful()) {
-            throw ExpoApiException::fromErrors([], $response->status);
-        }
-
-        /** @var array<string, mixed> $body */
-        return $body;
-    }
-
-    private static function snippet(string $body): string
-    {
-        $body = trim($body);
-
-        if ($body === '') {
-            return '(empty)';
-        }
-
-        return strlen($body) > 200 ? substr($body, 0, 200) . '...' : $body;
-    }
-
-    /**
-     * @param PushMessage|iterable<PushMessage> $messages
-     *
-     * @return list<PushMessage>
-     */
-    private static function toMessageList(PushMessage|iterable $messages): array
-    {
-        if ($messages instanceof PushMessage) {
-            return [$messages];
-        }
-
-        $list = [];
-
-        foreach ($messages as $message) {
-            if (!$message instanceof PushMessage) {
-                throw new InvalidMessageException('Every item must be a PushMessage.');
-            }
-
-            $list[] = $message;
-        }
-
-        return $list;
-    }
-
-    /**
-     * @param TicketCollection|PushTicket|string|iterable<PushTicket|string> $tickets
-     *
-     * @return list<PushTicket|string>
-     */
-    private static function toTicketList(TicketCollection|PushTicket|string|iterable $tickets): array
-    {
-        if ($tickets instanceof PushTicket || is_string($tickets)) {
-            return [$tickets];
-        }
-
-        $list = [];
-
-        foreach ($tickets as $ticket) {
-            if (!$ticket instanceof PushTicket && !is_string($ticket)) {
-                throw new InvalidMessageException('Every item must be a PushTicket or a receipt ID.');
-            }
-
-            $list[] = $ticket;
-        }
-
-        return $list;
+        return bin2hex(random_bytes(8));
     }
 }

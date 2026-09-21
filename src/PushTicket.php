@@ -4,24 +4,38 @@ declare(strict_types=1);
 
 namespace Expo\Push;
 
+use Expo\Push\Exception\InvalidStorageException;
+use Expo\Push\Result\ReceiptReference;
+use Expo\Push\Storage\StorageEnvelope;
 use JsonSerializable;
 
 /**
- * The answer of Expo for one device.
+ * The answer of Expo for one notification.
  *
  * A ticket with the status `ok` means that Expo accepted the message. It does not
- * mean that the device got it. Check the receipt for the delivery result.
+ * mean that Apple or Google got it, and it never means that the device showed it.
+ * Read the receipt for the handoff result.
+ *
+ * The SDK builds a ticket only from a well formed entry of the Expo answer. It
+ * never invents a ticket for a request that failed, and it never turns a
+ * malformed entry into a rejected device.
  */
 final readonly class PushTicket implements JsonSerializable
 {
+    public const string STATUS_OK = 'ok';
+
+    public const string STATUS_ERROR = 'error';
+
+    public const string STORAGE_TYPE = 'expo.ticket';
+
     /**
-     * @param string                $status    `ok` or `error`
-     * @param string|null           $id        the receipt ID, present when the status is `ok`
-     * @param PushToken|null        $token     the device that this ticket belongs to
-     * @param string|null           $message   the error text of Expo
-     * @param PushError|null        $error     the error code, when the SDK knows it
-     * @param string|null           $errorCode the raw error code of Expo
-     * @param array<string, mixed>  $details   the details object of Expo
+     * @param string               $status    `ok` or `error`
+     * @param string|null          $id        the receipt ID, always present when the status is `ok`
+     * @param PushToken|null       $token     the device that this ticket belongs to
+     * @param string|null          $message   the error text of Expo
+     * @param PushError|null       $error     the typed error code, when the SDK knows it
+     * @param string|null          $errorCode the raw error code of Expo, known or not
+     * @param array<string, mixed> $details   the details object of Expo, kept as it arrived
      */
     public function __construct(
         public string $status,
@@ -35,21 +49,38 @@ final readonly class PushTicket implements JsonSerializable
     }
 
     /**
-     * @param array<string, mixed> $data one entry of the `data` array of the API
+     * Reads one entry of the `data` array of the send endpoint.
+     *
+     * Returns null when the entry is not a valid ticket. The caller then marks
+     * that position unknown. A malformed entry never becomes a rejected device.
+     *
+     * @param array<string, mixed> $data
      */
-    public static function fromArray(array $data, ?PushToken $token = null): self
+    public static function fromExpoArray(array $data, ?PushToken $token = null): ?self
     {
+        $status = $data['status'] ?? null;
+
+        if ($status !== self::STATUS_OK && $status !== self::STATUS_ERROR) {
+            return null;
+        }
+
+        $id = $data['id'] ?? null;
+
+        if ($status === self::STATUS_OK && (!is_string($id) || $id === '')) {
+            return null;
+        }
+
         $details = isset($data['details']) && is_array($data['details']) ? $data['details'] : [];
+        /** @var array<string, mixed> $details */
         $errorCode = isset($details['error']) && is_string($details['error']) ? $details['error'] : null;
 
         if ($token === null && isset($details['expoPushToken']) && is_string($details['expoPushToken'])) {
             $token = PushToken::tryFrom($details['expoPushToken']);
         }
 
-        /** @var array<string, mixed> $details */
         return new self(
-            status: isset($data['status']) && is_string($data['status']) ? $data['status'] : 'error',
-            id: isset($data['id']) && is_string($data['id']) ? $data['id'] : null,
+            status: $status,
+            id: is_string($id) && $id !== '' ? $id : null,
             token: $token,
             message: isset($data['message']) && is_string($data['message']) ? $data['message'] : null,
             error: $errorCode === null ? null : PushError::tryFrom($errorCode),
@@ -60,7 +91,7 @@ final readonly class PushTicket implements JsonSerializable
 
     public function isOk(): bool
     {
-        return $this->status === 'ok';
+        return $this->status === self::STATUS_OK;
     }
 
     public function isError(): bool
@@ -69,25 +100,116 @@ final readonly class PushTicket implements JsonSerializable
     }
 
     /**
-     * True when the device no longer accepts notifications. Delete the token.
+     * What the error code of this ticket means. `null` when the ticket is `ok`.
      */
-    public function isDeviceNotRegistered(): bool
+    public function classification(): ?ErrorClassification
+    {
+        if ($this->isOk()) {
+            return null;
+        }
+
+        return $this->error?->classification() ?? ErrorClassification::Unknown;
+    }
+
+    /**
+     * True only when Expo said `DeviceNotRegistered`. Delete that token.
+     */
+    public function invalidatesToken(): bool
     {
         return $this->error === PushError::DeviceNotRegistered;
     }
 
     /**
+     * The receipt reference of this ticket, or null when there is nothing to look up.
+     *
+     * Only an accepted ticket with an ID produces a reference.
+     */
+    public function receiptReference(?int $notificationIndex = null, ?string $reference = null): ?ReceiptReference
+    {
+        if (!$this->isOk() || $this->id === null) {
+            return null;
+        }
+
+        return new ReceiptReference($this->id, $this->token, $notificationIndex, $reference);
+    }
+
+    /**
+     * The ticket in the shape that the SDK stores and reads back.
+     *
+     * This shape is not the Expo wire shape: it also holds the device token, and
+     * `fromStorageArray()` gives that token back. Use `fromExpoArray()` for an
+     * answer of the API.
+     *
+     * @return array<string, mixed>
+     */
+    public function toStorageArray(): array
+    {
+        return StorageEnvelope::wrap(self::STORAGE_TYPE, array_filter([
+            'status' => $this->status,
+            'id' => $this->id,
+            'token' => $this->token?->value,
+            'message' => $this->message,
+            'errorCode' => $this->errorCode,
+            'details' => $this->details === [] ? null : $this->details,
+        ], static fn (mixed $value): bool => $value !== null));
+    }
+
+    /**
+     * @param array<string, mixed> $stored
+     *
+     * @throws InvalidStorageException
+     */
+    public static function fromStorageArray(array $stored): self
+    {
+        $data = StorageEnvelope::unwrap(self::STORAGE_TYPE, $stored);
+
+        $status = $data['status'] ?? null;
+
+        if ($status !== self::STATUS_OK && $status !== self::STATUS_ERROR) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'status');
+        }
+
+        $id = $data['id'] ?? null;
+
+        // `fromExpoArray()` refuses an accepted ticket without an ID, and the
+        // storage reader must refuse the same thing. Such a ticket would look
+        // accepted and give nothing to look up.
+        if ($status === self::STATUS_OK && (!is_string($id) || $id === '')) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s has the status "ok" and no receipt ID. An accepted ticket always holds one.',
+                self::STORAGE_TYPE
+            ));
+        }
+
+        $token = $data['token'] ?? null;
+        $message = $data['message'] ?? null;
+        $errorCode = $data['errorCode'] ?? null;
+        $details = $data['details'] ?? [];
+
+        if (!is_array($details)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'details');
+        }
+
+        /** @var array<string, mixed> $details */
+        return new self(
+            status: $status,
+            id: is_string($id) ? $id : null,
+            token: is_string($token) ? new PushToken($token) : null,
+            message: is_string($message) ? $message : null,
+            error: is_string($errorCode) ? PushError::tryFrom($errorCode) : null,
+            errorCode: is_string($errorCode) ? $errorCode : null,
+            details: $details,
+        );
+    }
+
+    /**
+     * The same shape as `toStorageArray()`.
+     *
      * @return array<string, mixed>
      */
     #[\Override]
     public function jsonSerialize(): array
     {
-        return array_filter([
-            'status' => $this->status,
-            'id' => $this->id,
-            'token' => $this->token?->value,
-            'message' => $this->message,
-            'details' => $this->details === [] ? null : $this->details,
-        ], static fn (mixed $value): bool => $value !== null);
+        return $this->toStorageArray();
     }
 }

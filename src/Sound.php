@@ -13,6 +13,10 @@ use JsonSerializable;
  * Use `Sound::default()` for the standard sound, `Sound::named()` for a bundled
  * file, `Sound::none()` for a silent notification, and `Sound::critical()` for a
  * critical alert. A critical alert needs the critical alert entitlement from Apple.
+ *
+ * A silent sound and a missing sound are two different things. `Sound::none()`
+ * writes the literal `"sound": null` on the wire. A message without a sound
+ * writes no `sound` key at all.
  */
 final readonly class Sound implements JsonSerializable
 {
@@ -59,10 +63,18 @@ final readonly class Sound implements JsonSerializable
     #[\NoDiscard]
     public static function critical(string $name = 'default', float $volume = 1.0): self
     {
+        if (!is_finite($volume)) {
+            throw new InvalidMessageException('The sound volume must be a finite number.');
+        }
+
         if ($volume < 0.0 || $volume > 1.0) {
             throw new InvalidMessageException(
                 sprintf('The sound volume must be between 0.0 and 1.0, got %s.', $volume)
             );
+        }
+
+        if ($name === '') {
+            throw new InvalidMessageException('The sound name must not be empty.');
         }
 
         return new self($name, true, $volume);
@@ -75,6 +87,35 @@ final readonly class Sound implements JsonSerializable
     public static function from(self|string $value): self
     {
         return $value instanceof self ? $value : self::named($value);
+    }
+
+    /**
+     * Builds a sound from the value that `jsonSerialize()` produced.
+     *
+     * A null value means the silent sound, because a message without a sound
+     * never stores the key at all.
+     */
+    #[\NoDiscard]
+    public static function fromStored(mixed $value): self
+    {
+        if ($value === null) {
+            return self::none();
+        }
+
+        if (is_string($value)) {
+            return self::named($value);
+        }
+
+        if (is_array($value) && isset($value['critical']) && $value['critical'] === true) {
+            $name = isset($value['name']) && is_string($value['name']) ? $value['name'] : 'default';
+            $volume = isset($value['volume']) && (is_float($value['volume']) || is_int($value['volume']))
+                ? (float) $value['volume']
+                : 1.0;
+
+            return self::critical($name, $volume);
+        }
+
+        throw new InvalidMessageException('The stored sound is not a string, a null value or a critical alert.');
     }
 
     /**

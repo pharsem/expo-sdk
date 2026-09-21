@@ -2,6 +2,7 @@
 
 /tests               export-ignore
 /examples            export-ignore
+/benchmarks          export-ignore
 /.github             export-ignore
 /.githooks           export-ignore
 /.gitattributes      export-ignore

@@ -6,17 +6,26 @@ namespace Expo\Push;
 
 use ArrayIterator;
 use Countable;
+use Expo\Push\Exception\InvalidStorageException;
+use Expo\Push\Result\ReceiptReference;
+use Expo\Push\Storage\StorageEnvelope;
 use IteratorAggregate;
 use JsonSerializable;
 use Traversable;
 
 /**
- * Every ticket of one send, in the order of the devices.
+ * The real tickets of one send.
+ *
+ * The collection holds only tickets that Expo sent. A request that failed
+ * produces no ticket at all: read `SendResult::requestFailures()` for those.
+ * An empty collection therefore does not mean "everything worked".
  *
  * @implements IteratorAggregate<int, PushTicket>
  */
 final readonly class TicketCollection implements Countable, IteratorAggregate, JsonSerializable
 {
+    public const string STORAGE_TYPE = 'expo.tickets';
+
     /** @var list<PushTicket> */
     private array $tickets;
 
@@ -100,7 +109,7 @@ final readonly class TicketCollection implements Countable, IteratorAggregate, J
         $ids = [];
 
         foreach ($this->tickets as $ticket) {
-            if ($ticket->id !== null) {
+            if ($ticket->isOk() && $ticket->id !== null) {
                 $ids[] = $ticket->id;
             }
         }
@@ -109,13 +118,33 @@ final readonly class TicketCollection implements Countable, IteratorAggregate, J
     }
 
     /**
-     * Every device of this send.
+     * One receipt reference for each accepted ticket, with its device token.
+     *
+     * @return list<ReceiptReference>
+     */
+    public function references(): array
+    {
+        $references = [];
+
+        foreach ($this->tickets as $ticket) {
+            $reference = $ticket->receiptReference();
+
+            if ($reference !== null) {
+                $references[] = $reference;
+            }
+        }
+
+        return $references;
+    }
+
+    /**
+     * Every device of this collection, without repeats.
      *
      * @return list<PushToken>
      */
     public function tokens(): array
     {
-        return $this->collectTokens($this->tickets);
+        return self::collectTokens($this->tickets);
     }
 
     /**
@@ -125,17 +154,20 @@ final readonly class TicketCollection implements Countable, IteratorAggregate, J
      */
     public function failedTokens(): array
     {
-        return $this->collectTokens($this->errors()->all());
+        return self::collectTokens($this->errors()->all());
     }
 
     /**
-     * The dead devices. Delete these tokens from your database.
+     * The devices that Expo marked `DeviceNotRegistered`. Delete these tokens.
+     *
+     * The list holds only tokens with that explicit evidence. A payload error, a
+     * credential error and a provider problem never reach it.
      *
      * @return list<PushToken>
      */
     public function unregisteredTokens(): array
     {
-        return $this->collectTokens($this->withError(PushError::DeviceNotRegistered)->all());
+        return self::collectTokens($this->withError(PushError::DeviceNotRegistered)->all());
     }
 
     /**
@@ -159,6 +191,28 @@ final readonly class TicketCollection implements Countable, IteratorAggregate, J
         return array_map($callback, $this->tickets);
     }
 
+    /**
+     * Builds one collection out of many, in one pass.
+     *
+     * Use this instead of `merge()` in a loop: a chain of merges copies every
+     * earlier ticket again for each step.
+     *
+     * @param iterable<self> $collections
+     */
+    #[\NoDiscard]
+    public static function concat(iterable $collections): self
+    {
+        $tickets = [];
+
+        foreach ($collections as $collection) {
+            foreach ($collection->all() as $ticket) {
+                $tickets[] = $ticket;
+            }
+        }
+
+        return new self($tickets);
+    }
+
     #[\NoDiscard]
     public function merge(self $other): self
     {
@@ -172,12 +226,37 @@ final readonly class TicketCollection implements Countable, IteratorAggregate, J
     }
 
     /**
-     * @return list<PushTicket>
+     * @return array<string, mixed>
+     */
+    public function toStorageArray(): array
+    {
+        return StorageEnvelope::wrap(self::STORAGE_TYPE, [
+            'tickets' => array_map(static fn (PushTicket $ticket): array => $ticket->toStorageArray(), $this->tickets),
+        ]);
+    }
+
+    /**
+     * @param array<string, mixed> $stored
+     *
+     * @throws InvalidStorageException
+     */
+    public static function fromStorageArray(array $stored): self
+    {
+        $data = StorageEnvelope::unwrap(self::STORAGE_TYPE, $stored);
+
+        return new self(array_map(
+            static fn (array $entry): PushTicket => PushTicket::fromStorageArray($entry),
+            StorageEnvelope::listOfArrays(self::STORAGE_TYPE, $data, 'tickets')
+        ));
+    }
+
+    /**
+     * @return array<string, mixed>
      */
     #[\Override]
     public function jsonSerialize(): array
     {
-        return $this->tickets;
+        return $this->toStorageArray();
     }
 
     /**
@@ -185,7 +264,7 @@ final readonly class TicketCollection implements Countable, IteratorAggregate, J
      *
      * @return list<PushToken>
      */
-    private function collectTokens(array $tickets): array
+    private static function collectTokens(array $tickets): array
     {
         $tokens = [];
 

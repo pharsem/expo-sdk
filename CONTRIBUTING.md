@@ -20,6 +20,16 @@ composer test      # PHPUnit
 composer analyse   # PHPStan level 8
 ```
 
+Two more commands help before a larger change.
+
+```bash
+composer bench          # the local benchmark of planning, chunking and sending
+php examples/run-all.php  # every example, offline
+```
+
+No test and no example sends a real notification. The integration tests talk to
+a local server on 127.0.0.1, and nothing reaches Expo.
+
 ## Commit messages
 
 The project uses [Conventional Commits](https://www.conventionalcommits.org/).
@@ -66,6 +76,9 @@ The public API is the contract:
 - Every `public` class, method, constant, and property in `src/`.
 - The JSON that `PushMessage` builds for the Expo API.
 - The name and the parent of every exception.
+- The storage arrays: the envelope, the type names and the fields that
+  `toStorageArray()` writes and `fromStorageArray()` reads.
+- The acceptance states, the receipt states and the failure categories.
 
 These parts are not the contract. They can change in a patch release:
 
@@ -79,6 +92,8 @@ These parts are not the contract. They can change in a patch release:
 | A new field of the Expo API. | Minor |
 | A bug fix that keeps the signature. | Patch |
 | A removed method, or a renamed argument. | Major |
+| A new storage schema version. | Major |
+| A new case in an enum that an application matches on. | Major |
 | A raised PHP version. | Major |
 | A new required argument. | Major |
 

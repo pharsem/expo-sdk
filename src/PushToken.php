@@ -5,14 +5,22 @@ declare(strict_types=1);
 namespace Expo\Push;
 
 use Expo\Push\Exception\InvalidTokenException;
+use Expo\Push\Support\Redact;
 use JsonSerializable;
 use Stringable;
 
 /**
  * A validated Expo push token.
  *
- * Accepts the bracket form, `ExponentPushToken[xxxxxxxx]` or `ExpoPushToken[xxxxxxxx]`,
- * and the bare UUID form that older clients return.
+ * The class accepts the bracket form, `ExponentPushToken[xxxxxxxx]` or
+ * `ExpoPushToken[xxxxxxxx]`, and the bare UUID form that older clients return.
+ *
+ * Two rules that never change:
+ *
+ * - The SDK trims the leading and trailing whitespace and keeps everything else.
+ *   The value inside the brackets is opaque, so the SDK never changes its case.
+ * - A valid shape says nothing about registration. Only a ticket or a receipt
+ *   with `DeviceNotRegistered` tells you that a device is gone.
  */
 final readonly class PushToken implements JsonSerializable, Stringable
 {
@@ -25,13 +33,13 @@ final readonly class PushToken implements JsonSerializable, Stringable
      */
     public function __construct(string $value)
     {
-        $value = trim($value);
+        $trimmed = trim($value);
 
-        if (!self::isValid($value)) {
-            throw InvalidTokenException::for($value);
+        if (!self::isValid($trimmed)) {
+            throw InvalidTokenException::for($trimmed);
         }
 
-        $this->value = $value;
+        $this->value = $trimmed;
     }
 
     /**
@@ -43,6 +51,11 @@ final readonly class PushToken implements JsonSerializable, Stringable
         return self::isValid($value) ? new self($value) : null;
     }
 
+    /**
+     * True when the value has the shape of an Expo push token.
+     *
+     * The check trims the whitespace first, exactly like the constructor.
+     */
     public static function isValid(string $value): bool
     {
         return preg_match(self::PATTERN, trim($value)) === 1;
@@ -60,6 +73,14 @@ final readonly class PushToken implements JsonSerializable, Stringable
     public function equals(self $other): bool
     {
         return $this->value === $other->value;
+    }
+
+    /**
+     * A short stable value for a log line. It cannot give the token back.
+     */
+    public function fingerprint(): string
+    {
+        return Redact::token($this->value);
     }
 
     #[\Override]

@@ -4,30 +4,37 @@ declare(strict_types=1);
 
 namespace Expo\Push\Tests\Support;
 
+use Expo\Push\Exception\TransportException;
 use Expo\Push\Http\HttpClient;
+use Expo\Push\Http\HttpRequest;
 use Expo\Push\Http\HttpResponse;
+use Expo\Push\Http\TransportCapabilities;
+use Expo\Push\Http\TransportFailure;
+use Expo\Push\Http\TransportFailureKind;
 use RuntimeException;
 
 /**
- * An HTTP client that answers from a queue and records every request.
+ * A transport that answers from a queue and records every request.
  */
 final class FakeHttpClient implements HttpClient
 {
-    /** @var list<HttpResponse> */
-    private array $responses = [];
+    /** @var list<HttpResponse|TransportFailure> */
+    private array $steps = [];
 
-    /** @var list<array{url: string, body: string, headers: array<string, string>}> */
+    /** @var list<HttpRequest> */
     public array $requests = [];
 
+    public function __construct(private readonly TransportCapabilities $capabilities = new TransportCapabilities())
+    {
+    }
+
     /**
-     * @param array<string, mixed>              $body
+     * @param array<string, mixed>               $body
      * @param array<string, string|list<string>> $headers
      */
     public function queue(array $body, int $status = 200, array $headers = []): self
     {
-        $this->responses[] = new HttpResponse($status, (string) json_encode($body), $headers);
-
-        return $this;
+        return $this->queueRaw((string) json_encode($body), $status, $headers);
     }
 
     /**
@@ -35,27 +42,44 @@ final class FakeHttpClient implements HttpClient
      */
     public function queueRaw(string $body, int $status = 200, array $headers = []): self
     {
-        $this->responses[] = new HttpResponse($status, $body, $headers);
+        $this->steps[] = new HttpResponse($status, $body, $headers, null, 1);
 
         return $this;
     }
 
-    public function post(string $url, string $body, array $headers): HttpResponse
+    public function queueFailure(TransportFailureKind $kind, string $message = 'fake failure'): self
     {
-        if (isset($headers['content-encoding']) && $headers['content-encoding'] === 'gzip') {
-            $decoded = gzdecode($body);
-            $body = $decoded === false ? $body : $decoded;
+        $this->steps[] = TransportFailure::of($kind, $message, $kind->value);
+
+        return $this;
+    }
+
+    #[\Override]
+    public function capabilities(): TransportCapabilities
+    {
+        return $this->capabilities;
+    }
+
+    #[\Override]
+    public function send(HttpRequest $request): HttpResponse
+    {
+        $this->requests[] = $request;
+
+        $step = array_shift($this->steps);
+
+        if ($step === null) {
+            throw new RuntimeException(sprintf(
+                'The fake transport has no answer left for %s (request %d).',
+                $request->url,
+                count($this->requests)
+            ));
         }
 
-        $this->requests[] = ['url' => $url, 'body' => $body, 'headers' => $headers];
-
-        $response = array_shift($this->responses);
-
-        if ($response === null) {
-            throw new RuntimeException('The fake client has no answer left for ' . $url);
+        if ($step instanceof TransportFailure) {
+            throw new TransportException($step);
         }
 
-        return $response;
+        return $step;
     }
 
     public function requestCount(): int
@@ -64,17 +88,32 @@ final class FakeHttpClient implements HttpClient
     }
 
     /**
+     * The decoded body of one request, with the gzip removed when the SDK used it.
+     *
      * @return array<array-key, mixed>
      */
     public function payload(int $index = 0): array
     {
-        $body = json_decode($this->requests[$index]['body'], true);
+        $request = $this->requests[$index] ?? null;
 
-        if (!is_array($body)) {
+        if ($request === null) {
+            throw new RuntimeException('There is no request at index ' . $index . '.');
+        }
+
+        $body = $request->body;
+
+        if (($request->headers['content-encoding'] ?? null) === 'gzip') {
+            $plain = gzdecode($body);
+            $body = $plain === false ? $body : $plain;
+        }
+
+        $decoded = json_decode($body, true);
+
+        if (!is_array($decoded)) {
             throw new RuntimeException('Request ' . $index . ' does not hold a JSON array.');
         }
 
-        return $body;
+        return $decoded;
     }
 
     /**
@@ -82,6 +121,17 @@ final class FakeHttpClient implements HttpClient
      */
     public function headers(int $index = 0): array
     {
-        return $this->requests[$index]['headers'];
+        $request = $this->requests[$index] ?? null;
+
+        if ($request === null) {
+            throw new RuntimeException('There is no request at index ' . $index . '.');
+        }
+
+        return $request->headers;
+    }
+
+    public function pending(): int
+    {
+        return count($this->steps);
     }
 }

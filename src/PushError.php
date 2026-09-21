@@ -7,7 +7,8 @@ namespace Expo\Push;
 /**
  * An error code that Expo puts in a ticket or a receipt.
  *
- * Unknown codes stay available as the raw string on the ticket or the receipt.
+ * An unknown code stays available as the raw string on the ticket or the receipt,
+ * with the classification `ErrorClassification::Unknown`.
  */
 enum PushError: string
 {
@@ -36,21 +37,38 @@ enum PushError: string
     case ProviderError = 'ProviderError';
 
     /**
-     * True when the token is dead and you must delete it from your database.
+     * What this code means for your application.
      */
-    public function isPermanent(): bool
+    public function classification(): ErrorClassification
     {
-        return $this === self::DeviceNotRegistered;
+        return match ($this) {
+            self::DeviceNotRegistered => ErrorClassification::TokenInvalid,
+            self::MessageTooBig => ErrorClassification::PayloadTooBig,
+            self::MessageRateExceeded => ErrorClassification::Throttled,
+            self::MismatchSenderId,
+            self::InvalidCredentials,
+            self::InvalidProviderToken => ErrorClassification::Credentials,
+            self::ExpoError, self::ProviderError => ErrorClassification::ProviderProblem,
+        };
     }
 
     /**
-     * True when a later send of the same message can work.
+     * True only for `DeviceNotRegistered`. Delete that token from your database.
+     *
+     * This method replaces the old `isPermanent()`. The old name suggested that
+     * every lasting error kills the token, and that is wrong: a credential error
+     * lasts until you fix the credentials, and the token stays valid.
      */
-    public function isRetryable(): bool
+    public function invalidatesToken(): bool
     {
-        return match ($this) {
-            self::MessageRateExceeded, self::ExpoError, self::ProviderError => true,
-            default => false,
-        };
+        return $this->classification()->invalidatesToken();
+    }
+
+    /**
+     * True, false, or null when the code does not say. See `ErrorClassification`.
+     */
+    public function maySucceedLater(): ?bool
+    {
+        return $this->classification()->maySucceedLater();
     }
 }
