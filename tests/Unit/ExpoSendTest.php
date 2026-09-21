@@ -46,8 +46,9 @@ final class ExpoSendTest extends TestCase
     {
         $http = (new FakeHttpClient())->queue(['data' => [['status' => 'ok', 'id' => 'ticket-1']]]);
 
-        $this->expo($http)->notify(self::TOKEN_A, 'Hello', 'World', ['orderId' => 42]);
+        $tickets = $this->expo($http)->notify(self::TOKEN_A, 'Hello', 'World', ['orderId' => 42]);
 
+        self::assertCount(1, $tickets);
         self::assertSame(
             [['to' => self::TOKEN_A, 'title' => 'Hello', 'body' => 'World', 'data' => ['orderId' => 42]]],
             $http->payload()
@@ -117,11 +118,12 @@ final class ExpoSendTest extends TestCase
     {
         $http = (new FakeHttpClient())->queue(['data' => self::okTickets(2)]);
 
-        $this->expo($http)->send([
+        $tickets = $this->expo($http)->send([
             PushMessage::to(self::TOKEN_A)->title('One'),
             PushMessage::to(self::TOKEN_B)->title('Two'),
         ]);
 
+        self::assertCount(2, $tickets);
         self::assertSame(1, $http->requestCount());
         self::assertCount(2, $http->payload());
     }
@@ -143,7 +145,9 @@ final class ExpoSendTest extends TestCase
         $http = (new FakeHttpClient())->queue(['data' => self::okTickets(1)]);
         $expo = new Expo(accessToken: 'secret', httpClient: $http, maxRetries: 0);
 
-        $expo->send(PushMessage::to(self::TOKEN_A));
+        $tickets = $expo->send(PushMessage::to(self::TOKEN_A));
+
+        self::assertCount(1, $tickets);
 
         $headers = $http->headers();
         self::assertSame('Bearer secret', $headers['authorization']);
@@ -156,8 +160,9 @@ final class ExpoSendTest extends TestCase
     {
         $http = (new FakeHttpClient())->queue(['data' => self::okTickets(1)]);
 
-        $this->expo($http)->send(PushMessage::to(self::TOKEN_A)->body(str_repeat('a', 2000)));
+        $tickets = $this->expo($http)->send(PushMessage::to(self::TOKEN_A)->body(str_repeat('a', 2000)));
 
+        self::assertCount(1, $tickets);
         self::assertSame('gzip', $http->headers()['content-encoding'] ?? null);
         self::assertCount(1, $http->payload());
     }
@@ -168,7 +173,11 @@ final class ExpoSendTest extends TestCase
 
         $this->expectException(MessageTooLargeException::class);
 
-        $this->expo($http)->send(PushMessage::to(self::TOKEN_A)->data(['blob' => str_repeat('x', 5000)]));
+        $tickets = $this->expo($http)->send(
+            PushMessage::to(self::TOKEN_A)->data(['blob' => str_repeat('x', 5000)])
+        );
+
+        self::fail(sprintf('The send must fail. It returned %d tickets.', count($tickets)));
     }
 
     public function testItRetriesAfterARateLimitAnswer(): void
@@ -192,8 +201,11 @@ final class ExpoSendTest extends TestCase
         $expo = new Expo(httpClient: $http, maxRetries: 1, retryDelayMs: 0);
 
         try {
-            $expo->send(PushMessage::to(self::TOKEN_A));
-            self::fail('The send must raise a RateLimitException.');
+            $tickets = $expo->send(PushMessage::to(self::TOKEN_A));
+            self::fail(sprintf(
+                'The send must raise a RateLimitException. It returned %d tickets.',
+                count($tickets)
+            ));
         } catch (RateLimitException $exception) {
             self::assertSame('TOO_MANY_REQUESTS', $exception->errorCode);
             self::assertSame(429, $exception->status);
@@ -212,7 +224,9 @@ final class ExpoSendTest extends TestCase
         $this->expectException(ExpoApiException::class);
         $this->expectExceptionMessage('two projects');
 
-        $this->expo($http)->send(PushMessage::to(self::TOKEN_A));
+        $tickets = $this->expo($http)->send(PushMessage::to(self::TOKEN_A));
+
+        self::fail(sprintf('The send must fail. It returned %d tickets.', count($tickets)));
     }
 
     public function testItRetriesAfterAServerError(): void
@@ -235,7 +249,9 @@ final class ExpoSendTest extends TestCase
         $this->expectException(TransportException::class);
         $this->expectExceptionMessage('Expo answered with status 502');
 
-        $expo->send(PushMessage::to(self::TOKEN_A));
+        $tickets = $expo->send(PushMessage::to(self::TOKEN_A));
+
+        self::fail(sprintf('The send must fail. It returned %d tickets.', count($tickets)));
     }
 
     public function testItSendsNothingForAnEmptyList(): void

@@ -48,7 +48,9 @@ final class PushMessageTest extends TestCase
     {
         $this->expectException(InvalidMessageException::class);
 
-        PushMessage::to([]);
+        $message = PushMessage::to([]);
+
+        self::fail(sprintf('The call must fail. It returned %d recipients.', $message->recipientCount()));
     }
 
     public function testItNeverChangesTheOriginalMessage(): void
@@ -141,14 +143,18 @@ final class PushMessageTest extends TestCase
         $this->expectException(InvalidMessageException::class);
         $this->expectExceptionMessage('"urgent" is not a valid value.');
 
-        PushMessage::to(self::TOKEN_A)->priority('urgent');
+        $message = PushMessage::to(self::TOKEN_A)->priority('urgent');
+
+        self::fail(sprintf('The call must fail. It returned the priority %s.', $message->priority?->value));
     }
 
     public function testItRejectsValuesOutOfRange(): void
     {
         $this->expectException(InvalidMessageException::class);
 
-        PushMessage::to(self::TOKEN_A)->relevanceScore(1.5);
+        $message = PushMessage::to(self::TOKEN_A)->relevanceScore(1.5);
+
+        self::fail(sprintf('The call must fail. It returned the score %s.', $message->relevanceScore));
     }
 
     public function testItAcceptsADateTimeForTheExpiration(): void

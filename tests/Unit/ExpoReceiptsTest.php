@@ -102,8 +102,9 @@ final class ExpoReceiptsTest extends TestCase
         $http->queue(['data' => []]);
         $http->queue(['data' => []]);
 
-        $this->expo($http)->receipts($ids);
+        $receipts = $this->expo($http)->receipts($ids);
 
+        self::assertCount(0, $receipts);
         self::assertSame(2, $http->requestCount());
         self::assertCount(300, $http->payload(0)['ids']);
         self::assertCount(20, $http->payload(1)['ids']);
@@ -113,8 +114,9 @@ final class ExpoReceiptsTest extends TestCase
     {
         $http = (new FakeHttpClient())->queue(['data' => []]);
 
-        $this->expo($http)->receipts(['ticket-1', 'ticket-1', 'ticket-2']);
+        $receipts = $this->expo($http)->receipts(['ticket-1', 'ticket-1', 'ticket-2']);
 
+        self::assertCount(0, $receipts);
         self::assertSame(['ids' => ['ticket-1', 'ticket-2']], $http->payload());
     }
 
