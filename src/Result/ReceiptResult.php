@@ -321,6 +321,8 @@ final readonly class ReceiptResult implements JsonSerializable
 
             if ($position === null) {
                 $index[$entry->id] = count($entries);
+                // Only the failure index moves. Everything else of the entry
+                // stays, the later references included.
                 $entries[] = new ReceiptEntry(
                     $entry->id,
                     $entry->state,
@@ -329,6 +331,7 @@ final readonly class ReceiptResult implements JsonSerializable
                     $entry->notificationIndex,
                     $entry->reference,
                     $shifted,
+                    $entry->otherReferences,
                 );
 
                 continue;

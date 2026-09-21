@@ -384,6 +384,62 @@ final class ReviewRegressionTest extends TestCase
     }
 
     /**
+     * A merge must keep the later references of an ID that only the second
+     * result holds.
+     */
+    public function testAMergeKeepsTheReferencesOfANewId(): void
+    {
+        $first = new ReceiptResult([new ReceiptEntry('r1', ReceiptState::Missing)]);
+        $second = new ReceiptResult([
+            new ReceiptEntry(
+                'r2',
+                ReceiptState::Returned,
+                new PushReceipt('r2', 'ok'),
+                new PushToken(self::TOKEN_A),
+                4,
+                'order-4',
+                null,
+                [new ReceiptReference('r2', new PushToken(self::TOKEN_A), 9, 'order-9')],
+            ),
+        ]);
+
+        $merged = $first->merge($second);
+        $entry = $merged->entry('r2');
+
+        self::assertSame(2, $merged->count());
+        self::assertInstanceOf(ReceiptEntry::class, $entry);
+        self::assertSame([4, 9], $entry->notificationIndexes());
+        self::assertSame('order-9', $entry->otherReferences[0]->reference);
+    }
+
+    public function testAMergeShiftsTheFailureIndexOfANewId(): void
+    {
+        $failure = new \Expo\Push\Result\RequestFailure(
+            operation: \Expo\Push\Result\OperationType::Receipts,
+            chunkOrdinal: 0,
+            indexes: [],
+            ids: ['r1'],
+            category: \Expo\Push\Result\FailureCategory::Transport,
+            message: 'the first lookup failed',
+        );
+
+        $first = new ReceiptResult(
+            [new ReceiptEntry('r1', ReceiptState::LookupFailed, null, null, null, null, 0)],
+            [$failure],
+        );
+        $second = new ReceiptResult(
+            [new ReceiptEntry('r2', ReceiptState::LookupFailed, null, null, null, null, 0)],
+            [$failure],
+        );
+
+        $merged = $first->merge($second);
+
+        self::assertSame(0, $merged->entry('r1')?->failureIndex);
+        self::assertSame(1, $merged->entry('r2')?->failureIndex);
+        self::assertCount(2, $merged->requestFailures());
+    }
+
+    /**
      * A returned entry without a receipt would report a complete lookup and give
      * nothing back.
      */
