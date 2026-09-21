@@ -159,7 +159,9 @@ final class MissedFindingsTest extends TestCase
             $delivery->queueFailure($kind);
             $delivery->queue(['data' => self::okTickets(1)]);
 
-            $this->expo($delivery, new DeliveryRetryPolicy())->send(PushMessage::to(self::TOKEN_A));
+            self::ignoreResult(
+                $this->expo($delivery, new DeliveryRetryPolicy())->send(PushMessage::to(self::TOKEN_A))
+            );
 
             $deliveryRepeats = $delivery->requestCount() === 2;
 
