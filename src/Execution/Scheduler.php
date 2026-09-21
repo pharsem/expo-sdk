@@ -181,10 +181,15 @@ final class Scheduler
                     return;
                 }
 
+                // The chunk gave up on the wait, so nothing waits for this
+                // cooldown any more. Keeping it would make the loop sleep the
+                // whole limiter delay before it marks the later chunks skipped,
+                // and that defeats the inline wait cap.
+                $cooldownUntil = null;
                 $this->emitFinished($chunk);
                 $stopped = true;
 
-                return;
+                continue;
             }
 
             $request = $chunk->nextRequest($now, $deadline === null ? null : $deadline - $now);

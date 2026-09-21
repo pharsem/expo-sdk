@@ -11,10 +11,14 @@ use Expo\Push\Result\OperationType;
  *
  * It repeats a send only when the SDK knows that Expo did not apply the attempt:
  *
- * - A failure before transmission: the connection failed, the name did not
- *   resolve, the TLS handshake failed, or the client refused to build the request.
+ * - A failure before transmission that a later attempt can pass: the connection
+ *   failed, the name did not resolve, or the TLS handshake failed.
  * - An explicit rate limit rejection: HTTP 429. The server answered and did
  *   nothing with the notifications.
+ *
+ * It never repeats a certificate that does not verify, a wrong transport
+ * setting, or a request that the client refused to build. Those never pass on a
+ * repeat, and the delivery policy stops them as well.
  *
  * It never repeats a timeout, an interrupted transfer, a 5xx status or a generic
  * PSR-18 network exception. None of those say what the server did. Unknown stays
@@ -57,7 +61,13 @@ final readonly class ConservativeSendPolicy implements RetryPolicy
             return RetryDecision::retry('status 429 says that the server applied nothing');
         }
 
-        if ($outcome->result === AttemptResult::TransportFailure && $outcome->isBeforeTransmission()) {
+        // Two conditions, both needed: the SDK knows that nothing reached the
+        // network, and the delivery rules call the failure transient.
+        if (
+            $outcome->result === AttemptResult::TransportFailure
+            && $outcome->isBeforeTransmission()
+            && $this->delivery->decide($operation, $attempt, $outcome)->retry
+        ) {
             return RetryDecision::retry('the request never reached the network');
         }
 

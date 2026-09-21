@@ -99,8 +99,9 @@ final readonly class RetrySettings
             return 0;
         }
 
-        $steps = min($next - 2, 30);
-        $delay = $this->initialBackoffMs * ($this->backoffMultiplier ** $steps);
+        // The exponent grows without a clamp. An overflow becomes INF, and the
+        // check below turns both INF and a large value into the cap.
+        $delay = $this->initialBackoffMs * ($this->backoffMultiplier ** ($next - 2));
 
         if (!is_finite($delay) || $delay > $this->maxBackoffMs) {
             return $this->maxBackoffMs;

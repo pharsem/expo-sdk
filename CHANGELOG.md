@@ -110,6 +110,18 @@ failure, so a late failure can never take the earlier answers with it.
 - A stored receipt entry with the state `returned` and no receipt read back as a
   complete lookup that gives nothing. Both contradictions now raise
   `InvalidStorageException`.
+- A transport that refused a request before it started raised from `send()` with
+  a concurrency above 1, and returned a result with a concurrency of 1. Both
+  paths now return a result.
+- A deferred limiter wait left the bucket cooldown in place, so the SDK slept the
+  whole delay before it marked the later chunks skipped.
+- A malformed ticket entry reported no duplicate risk. Expo answered and may have
+  accepted the notification, so a resend can duplicate it.
+- `ConservativeSendPolicy` repeated a certificate failure and a wrong transport
+  setting. It now repeats only what the delivery rules also call transient.
+- The backoff stopped growing after 30 steps, below the configured cap.
+- A stored ticket with the status `ok` and no receipt ID read back as accepted
+  with nothing to look up.
 
 ## 1.0.0 - 2026-09-21
 

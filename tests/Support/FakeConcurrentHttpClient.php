@@ -42,8 +42,15 @@ final class FakeConcurrentHttpClient implements ConcurrentHttpClient
 
     public int $polls = 0;
 
-    public function __construct(private readonly int $maxConcurrency = 6)
-    {
+    /**
+     * @param TransportFailureKind|null $refuseStart makes start() raise, the way a
+     *                                               real transport does for a bad
+     *                                               URL or a bad header
+     */
+    public function __construct(
+        private readonly int $maxConcurrency = 6,
+        private readonly ?TransportFailureKind $refuseStart = null,
+    ) {
     }
 
     /**
@@ -100,6 +107,16 @@ final class FakeConcurrentHttpClient implements ConcurrentHttpClient
     #[\Override]
     public function start(int $id, HttpRequest $request): void
     {
+        if ($this->refuseStart !== null) {
+            $this->requests[] = $request;
+
+            throw new TransportException(TransportFailure::of(
+                $this->refuseStart,
+                'the transport refused the request',
+                $this->refuseStart->value
+            ));
+        }
+
         $step = array_shift($this->steps);
 
         if ($step === null) {

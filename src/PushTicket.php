@@ -170,6 +170,17 @@ final readonly class PushTicket implements JsonSerializable
         }
 
         $id = $data['id'] ?? null;
+
+        // `fromExpoArray()` refuses an accepted ticket without an ID, and the
+        // storage reader must refuse the same thing. Such a ticket would look
+        // accepted and give nothing to look up.
+        if ($status === self::STATUS_OK && (!is_string($id) || $id === '')) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s has the status "ok" and no receipt ID. An accepted ticket always holds one.',
+                self::STORAGE_TYPE
+            ));
+        }
+
         $token = $data['token'] ?? null;
         $message = $data['message'] ?? null;
         $errorCode = $data['errorCode'] ?? null;

@@ -34,7 +34,8 @@ use Expo\Push\Support\Sleeper;
  * - A valid ticket with the status `error` gives `NotAccepted`, unless an
  *   earlier attempt was ambiguous. The last answer cannot say what the earlier
  *   attempt did, so the result stays `Unknown`.
- * - A malformed entry at a trustworthy position gives `Unknown`.
+ * - A malformed entry at a trustworthy position gives `Unknown`. Every unknown
+ *   acceptance of a dispatched chunk carries the duplicate risk.
  * - A failed request gives `NotAccepted` when the SDK knows that Expo accepted
  *   nothing: every attempt failed before transmission, or the server refused the
  *   request with a 4xx status. It gives `Unknown` otherwise.
@@ -207,12 +208,15 @@ final readonly class SendOperation
         $planned = $this->plan->notification($index);
 
         if ($ticket === null) {
+            // The request reached Expo and Expo answered. The entry is not
+            // readable, so Expo may well have accepted this notification. A
+            // resend can show it twice, whatever the earlier attempts did.
             return $this->outcomeFor(
                 $index,
                 Acceptance::Unknown,
                 null,
                 null,
-                $ambiguous,
+                true,
                 null,
                 'the ticket entry at this position was malformed, so acceptance is unknown'
             );

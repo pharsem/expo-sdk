@@ -306,7 +306,10 @@ final class StorageTest extends TestCase
 
     public function testAFieldOfTheWrongTypeIsRejected(): void
     {
-        $stored = StorageEnvelope::wrap(PushTicket::STORAGE_TYPE, ['status' => 'ok', 'details' => 'not an array']);
+        $stored = StorageEnvelope::wrap(
+            PushTicket::STORAGE_TYPE,
+            ['status' => 'ok', 'id' => 'r1', 'details' => 'not an array']
+        );
 
         $this->expectException(InvalidStorageException::class);
         $this->expectExceptionMessage('details');
