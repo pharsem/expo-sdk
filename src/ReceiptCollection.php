@@ -73,8 +73,6 @@ final readonly class ReceiptCollection implements Countable, IteratorAggregate, 
     }
 
     /**
-     * The IDs that this collection holds.
-     *
      * @return list<string>
      */
     public function ids(): array

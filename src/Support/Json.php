@@ -76,7 +76,9 @@ final class Json
     }
 
     /**
-     * Turns a decoded `stdClass` into an associative array, one level deep or more.
+     * Copies the top level of a decoded `stdClass` into an associative array.
+     *
+     * A nested object stays a `stdClass`. Use `deepArray()` to convert every level.
      *
      * @return array<string, mixed>
      */

@@ -27,7 +27,6 @@ printf("the limiter counts notifications, not requests.\n");
 printf("the default rate is %d notifications each second, the documented Expo limit.\n\n",
     SlidingWindowRateLimiter::EXPO_NOTIFICATIONS_PER_SECOND);
 
-// The built in cURL transport runs up to six requests at one time.
 $limiter = new SlidingWindowRateLimiter();
 
 $expo = new Expo(

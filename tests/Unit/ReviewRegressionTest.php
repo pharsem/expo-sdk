@@ -26,7 +26,9 @@ use Expo\Push\Tests\Support\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
- * The findings of the review of pull request 1, one test for each.
+ * Rules that a code review found broken once, one test for each.
+ *
+ * Every test here states the rule that must hold, not the bug that broke it.
  */
 final class ReviewRegressionTest extends TestCase
 {

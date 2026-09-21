@@ -45,8 +45,8 @@ foreach ($result->outcomes() as $outcome) {
 printf("\ncomplete success: %s\n", $result->isCompleteSuccess() ? 'yes' : 'no');
 printf("needs attention:  %s\n", $result->needsAttention() ? 'yes' : 'no');
 
-// A ticket says that Expo accepted the notification. It does not say that Apple
-// or Google took it, and it never says that the device showed it.
+// Store these and read the receipts some minutes later. A ticket says only that
+// Expo accepted the notification, never that Apple, Google or the device took it.
 printf("\nreceipt references to store: %d\n", count($result->receiptReferences()));
 
 // The result never raises for a device error. Ask for the request level result.

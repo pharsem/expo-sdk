@@ -21,7 +21,9 @@ use Expo\Push\Tests\Support\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
- * The findings that the review marked "previously missed", one test for each.
+ * Edge cases that an earlier version of the SDK got wrong, one test for each.
+ *
+ * Every test here states the rule that must hold, not the bug that broke it.
  */
 final class MissedFindingsTest extends TestCase
 {
@@ -33,7 +35,7 @@ final class MissedFindingsTest extends TestCase
     {
         $http = new FakeConcurrentHttpClient(refuseStart: TransportFailureKind::InvalidConfiguration);
 
-        // Before the fix this call raised TransportException.
+        // A refused start returns a result. It never raises TransportException.
         $result = $this->expo($http, concurrency: 2, sendChunkSize: 1)
             ->send(PushMessage::to([self::TOKEN_A, self::TOKEN_B]));
 
@@ -186,7 +188,7 @@ final class MissedFindingsTest extends TestCase
 
         self::assertSame(1, $settings->backoffFor(2));
         self::assertSame(1_073_741_824, $settings->backoffFor(32));
-        // Before the fix every later attempt stopped here, below the cap.
+        // Step 33 passes the cap, and every later step stays on it.
         self::assertSame(2_000_000_000, $settings->backoffFor(33));
         self::assertSame(2_000_000_000, $settings->backoffFor(40));
     }

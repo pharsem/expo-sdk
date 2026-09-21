@@ -142,9 +142,6 @@ final class ChunkRunner
         return $this->outcome;
     }
 
-    /**
-     * True when the chunk can go out at this moment.
-     */
     public function isReady(int $nowMonotonic): bool
     {
         if ($this->state === ChunkState::Pending) {

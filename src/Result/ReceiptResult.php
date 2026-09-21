@@ -190,11 +190,10 @@ final readonly class ReceiptResult implements JsonSerializable
     }
 
     /**
-     * The same list as `missingIds()`.
+     * An alias of `missingIds()`. Prefer that name.
      *
-     * The old name said "pending", and that was wrong: a missing receipt can also
-     * mean an invalid ID or a receipt that Expo no longer keeps. The method stays
-     * for the older code that calls it. Prefer `missingIds()`.
+     * "Pending" claims too much: a missing receipt can also mean an invalid ID
+     * or a receipt that Expo no longer keeps.
      *
      * @return list<string>
      */

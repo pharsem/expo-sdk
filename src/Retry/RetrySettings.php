@@ -54,8 +54,7 @@ final readonly class RetrySettings
     }
 
     /**
-     * The defaults of the SDK: three attempts, one second of backoff, a 30 second
-     * cap, a 10 second inline wait and a 60 second chunk budget.
+     * The defaults of this SDK. The constructor signature holds the values.
      */
     public static function defaults(): self
     {
@@ -70,9 +69,6 @@ final readonly class RetrySettings
         return new self(maxAttempts: 1);
     }
 
-    /**
-     * A copy with another attempt count.
-     */
     public function withMaxAttempts(int $maxAttempts): self
     {
         return new self(

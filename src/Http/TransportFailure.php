@@ -49,9 +49,8 @@ final readonly class TransportFailure
      */
     public function transmission(): Transmission
     {
-        // A byte counter above zero is evidence that bytes left this process.
-        // It never proves that the server accepted anything, so it can only
-        // move the answer toward Unknown, never toward a clean rejection.
+        // The counter can only move the answer toward Unknown. It never
+        // produces a clean rejection.
         if ($this->bytesUploaded !== null && $this->bytesUploaded > 0) {
             return Transmission::Unknown;
         }

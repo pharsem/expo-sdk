@@ -180,9 +180,6 @@ final readonly class PushMessage implements JsonSerializable
         return $this->with('to', self::unique($tokens));
     }
 
-    /**
-     * The number of devices that this message goes to.
-     */
     public function recipientCount(): int
     {
         return count($this->to);

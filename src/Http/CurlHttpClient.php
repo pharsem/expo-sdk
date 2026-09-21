@@ -22,9 +22,6 @@ use Throwable;
  */
 final class CurlHttpClient implements ConcurrentHttpClient
 {
-    /**
-     * The largest number of requests that this transport runs at one time.
-     */
     public const int MAX_CONCURRENCY = 6;
 
     /** cURL error 60: the server certificate did not verify. */

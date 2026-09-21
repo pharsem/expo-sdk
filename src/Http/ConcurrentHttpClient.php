@@ -30,9 +30,6 @@ interface ConcurrentHttpClient extends HttpClient
      */
     public function poll(int $timeoutMs): array;
 
-    /**
-     * The number of requests that are running now.
-     */
     public function inFlight(): int;
 
     /**

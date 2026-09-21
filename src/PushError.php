@@ -55,9 +55,8 @@ enum PushError: string
     /**
      * True only for `DeviceNotRegistered`. Delete that token from your database.
      *
-     * This method replaces the old `isPermanent()`. The old name suggested that
-     * every lasting error kills the token, and that is wrong: a credential error
-     * lasts until you fix the credentials, and the token stays valid.
+     * A lasting error does not always kill the token. A credential error lasts
+     * until you fix the credentials, and the token stays valid.
      */
     public function invalidatesToken(): bool
     {

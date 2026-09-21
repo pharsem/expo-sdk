@@ -75,10 +75,9 @@ abstract class TestCase extends PhpUnitTestCase
     /**
      * Marks a value as used, and does nothing else.
      *
-     * PHP 8.5 warns when a call to a `#[\NoDiscard]` method drops its result. It
-     * warns at the call, so a test that expects the call to raise still has to
-     * use the value. The `(void)` cast of PHP 8.5 is not available on PHP 8.3,
-     * so the test suite passes the value here instead.
+     * PHP 8.5 warns at the call site when a `#[\NoDiscard]` result goes unused,
+     * so a test that expects the call to raise still has to use the value. The
+     * PHP 8.5 `(void)` cast needs a newer floor than the `^8.3` of this package.
      */
     protected static function ignoreResult(mixed $value): void
     {
