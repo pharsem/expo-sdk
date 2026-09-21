@@ -20,10 +20,15 @@ final class SlowLimiter implements RateLimiter
     /** @var list<array{bucket: string, permits: int}> */
     public array $calls = [];
 
+    /**
+     * @param int      $costMs      the milliseconds that one call takes
+     * @param int|null $denyForMs   makes every call deny and ask for this wait
+     */
     public function __construct(
         private readonly FrozenClock $clock,
         private readonly int $costMs,
         private readonly ?int $capacity = null,
+        private readonly ?int $denyForMs = null,
     ) {
     }
 
@@ -33,7 +38,9 @@ final class SlowLimiter implements RateLimiter
         $this->calls[] = ['bucket' => $bucket, 'permits' => $permits];
         $this->clock->advance($this->costMs);
 
-        return PermitDecision::granted();
+        return $this->denyForMs === null
+            ? PermitDecision::granted()
+            : PermitDecision::wait($this->denyForMs);
     }
 
     #[\Override]

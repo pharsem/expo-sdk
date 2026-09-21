@@ -236,6 +236,14 @@ final class Scheduler
                 $wait = max(1, $decision->retryAfterMs);
                 $this->extendCooldown($now + $wait, $this->clock->nowUtcMillis() + $wait);
 
+                // The cooldown of the limiter is on the record now, so the
+                // deadline can end the chunk without losing that moment.
+                if ($deadline !== null && $now >= $deadline) {
+                    $this->failDeadline($chunk);
+
+                    continue;
+                }
+
                 if ($chunk->waitForCooldown($wait, $now, sprintf('the rate limiter of bucket "%s"', $this->bucket))) {
                     $this->emit(new WaitScheduled(
                         $this->operationId,

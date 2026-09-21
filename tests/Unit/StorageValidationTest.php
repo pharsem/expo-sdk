@@ -518,7 +518,7 @@ final class StorageValidationTest extends TestCase
         );
 
         $this->expectException(InvalidStorageException::class);
-        $this->expectExceptionMessage('receipt of another device');
+        $this->expectExceptionMessage('names two devices');
 
         ReceiptEntry::fromStorageArray($entry->toStorageArray());
     }

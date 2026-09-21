@@ -225,6 +225,14 @@ final readonly class NotificationOutcome implements JsonSerializable
             ? self::requiredEnum($data, 'recovery', RecoveryDisposition::class)
             : null;
 
+        self::assertEvidenceFits($acceptance, $ticket, $reason, $duplicateRisk);
+
+        // The raw value gets its own check, before the constructor normalizes
+        // it. A contradiction has to raise, not disappear.
+        if ($recovery !== null) {
+            self::assertDispositionFits($acceptance, $ticket, $recovery);
+        }
+
         $outcome = new self(
             index: $index,
             messageKey: $messageKey,
@@ -291,29 +299,133 @@ final readonly class NotificationOutcome implements JsonSerializable
     }
 
     /**
+     * Refuses a combination of acceptance and evidence that no send produces.
+     *
+     * @throws InvalidStorageException
+     */
+    private static function assertEvidenceFits(
+        Acceptance $acceptance,
+        ?PushTicket $ticket,
+        ?NotAcceptedReason $reason,
+        bool $duplicateRisk,
+    ): void {
+        // Acceptance needs the ticket that proves it. The evidence comes first,
+        // because every other rule reads it.
+        if (
+            $acceptance === Acceptance::Accepted
+            && ($ticket === null || !$ticket->isOk() || $ticket->id === null)
+        ) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s is accepted and holds no successful ticket with a receipt ID. Acceptance needs that '
+                . 'evidence.',
+                self::STORAGE_TYPE
+            ));
+        }
+
+        // Only an accepted notification holds a ticket that reports success.
+        if ($ticket?->isOk() === true && $acceptance !== Acceptance::Accepted) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s is "%s" and holds a successful ticket. Only an accepted notification does.',
+                self::STORAGE_TYPE,
+                $acceptance->value
+            ));
+        }
+
+        // Every uncertain notification went out, so a repeat can duplicate it.
+        if ($acceptance === Acceptance::Unknown && !$duplicateRisk) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s is uncertain and carries no duplicate risk. An attempt of it went out.',
+                self::STORAGE_TYPE
+            ));
+        }
+
+        // A rejection is certain, so nothing of it can be on its way.
+        if ($acceptance === Acceptance::NotAccepted && $duplicateRisk) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s is not accepted and carries a duplicate risk. The two contradict each other.',
+                self::STORAGE_TYPE
+            ));
+        }
+
+        if ($acceptance !== Acceptance::NotAccepted && $reason !== null) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s is "%s" and names a rejection reason. Only a rejection has one.',
+                self::STORAGE_TYPE,
+                $acceptance->value
+            ));
+        }
+    }
+
+    /**
+     * Refuses a stored disposition that the evidence does not support.
+     *
+     * Expo decides the disposition of one rejected device, so the reader knows
+     * the exact value there. A request failure decides it for a whole chunk,
+     * and the chunk is not part of this array, so the reader demands open work
+     * and leaves the choice between the two open values.
+     *
+     * @throws InvalidStorageException
+     */
+    private static function assertDispositionFits(
+        Acceptance $acceptance,
+        ?PushTicket $ticket,
+        RecoveryDisposition $recovery,
+    ): void {
+        $expected = self::expectedDisposition($acceptance, $ticket);
+
+        if ($expected !== null && $recovery !== $expected) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s is "%s" with the recovery "%s". The evidence says "%s".',
+                self::STORAGE_TYPE,
+                $acceptance->value,
+                $recovery->value,
+                $expected->value
+            ));
+        }
+
+        if ($expected === null && !$recovery->isOpen()) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s is "%s" with the recovery "none". The evidence says that the work is open.',
+                self::STORAGE_TYPE,
+                $acceptance->value
+            ));
+        }
+    }
+
+    /**
+     * The one disposition that the evidence names, or null when a request
+     * failure decides it.
+     */
+    private static function expectedDisposition(Acceptance $acceptance, ?PushTicket $ticket): ?RecoveryDisposition
+    {
+        if ($acceptance === Acceptance::Accepted) {
+            return RecoveryDisposition::None;
+        }
+
+        if ($ticket === null || !$ticket->isError()) {
+            return null;
+        }
+
+        $fromCode = RecoveryDisposition::forClassification($ticket->classification());
+
+        if ($acceptance === Acceptance::NotAccepted) {
+            return $fromCode;
+        }
+
+        // An earlier ambiguous attempt can already have been accepted, so the
+        // work stays open whatever the code of the last answer says.
+        return $fromCode === RecoveryDisposition::Retryable
+            ? RecoveryDisposition::Retryable
+            : RecoveryDisposition::NeedsIntervention;
+    }
+
+    /**
      * Refuses a stored combination that no send can produce.
      *
      * @throws InvalidStorageException
      */
     private function assertConsistent(): void
     {
-        if ($this->acceptance === Acceptance::Accepted) {
-            if ($this->ticket === null || !$this->ticket->isOk() || $this->ticket->id === null) {
-                throw new InvalidStorageException(sprintf(
-                    'The stored %s is accepted and holds no successful ticket with a receipt ID. Acceptance needs '
-                    . 'that evidence.',
-                    self::STORAGE_TYPE
-                ));
-            }
-
-            if ($this->reason !== null) {
-                throw new InvalidStorageException(sprintf(
-                    'The stored %s is accepted and names a rejection reason. The two contradict each other.',
-                    self::STORAGE_TYPE
-                ));
-            }
-        }
-
         if ($this->acceptance === Acceptance::NotAccepted && $this->reason === null) {
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'reason');
         }

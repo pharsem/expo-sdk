@@ -170,7 +170,9 @@ final readonly class ReceiptEntry implements JsonSerializable
             );
         }
 
-        if ($token !== null && (!is_string($token) || $token === '')) {
+        // A token of the wrong shape must raise a storage error, not escape as
+        // an InvalidTokenException from the constructor.
+        if ($token !== null && (!is_string($token) || !PushToken::isValid($token))) {
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'token');
         }
 
@@ -189,16 +191,10 @@ final readonly class ReceiptEntry implements JsonSerializable
             self::assertReferenceBelongs($entry, $reference);
         }
 
-        // The entry, its receipt and its references all name one notification.
-        // A stored array that gives them two devices is broken, not merged.
-        $receiptToken = $entry->receipt?->token;
-
-        if ($receiptToken !== null && $entry->token !== null && $receiptToken->value !== $entry->token->value) {
-            throw new InvalidStorageException(sprintf(
-                'The stored %s holds a receipt of another device. The association is broken.',
-                self::STORAGE_TYPE
-            ));
-        }
+        // The entry, its receipt and every reference name one notification, so
+        // every token that any of them holds is the same token. The entry does
+        // not have to hold one itself.
+        $entry->assertOneDevice();
 
         if ($entry->receipt !== null && $entry->receipt->id !== $entry->id) {
             throw new InvalidStorageException(sprintf(
@@ -208,6 +204,39 @@ final readonly class ReceiptEntry implements JsonSerializable
         }
 
         return $entry;
+    }
+
+    /**
+     * Refuses an entry whose parts name two devices.
+     *
+     * @throws InvalidStorageException
+     */
+    private function assertOneDevice(): void
+    {
+        $canonical = null;
+
+        foreach ([$this->token, $this->receipt?->token, ...array_map(
+            static fn (ReceiptReference $reference): ?PushToken => $reference->token,
+            $this->otherReferences
+        )] as $token) {
+            if ($token === null) {
+                continue;
+            }
+
+            if ($canonical === null) {
+                $canonical = $token->value;
+
+                continue;
+            }
+
+            if ($canonical !== $token->value) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s "%s" names two devices. One receipt ID belongs to one notification.',
+                    self::STORAGE_TYPE,
+                    $this->id
+                ));
+            }
+        }
     }
 
     /**
@@ -230,15 +259,6 @@ final readonly class ReceiptEntry implements JsonSerializable
             ));
         }
 
-        $token = $reference->token;
-
-        if ($token !== null && $entry->token !== null && $token->value !== $entry->token->value) {
-            throw new InvalidStorageException(sprintf(
-                'The stored %s "%s" holds a later reference of another device. The association is broken.',
-                self::STORAGE_TYPE,
-                $entry->id
-            ));
-        }
     }
 
     /**

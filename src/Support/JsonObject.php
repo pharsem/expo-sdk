@@ -42,9 +42,24 @@ final readonly class JsonObject implements JsonSerializable, IteratorAggregate, 
 {
     /**
      * @param array<string, mixed> $values already checked and copied by `Json::snapshot()`
+     * @param int                  $depth  how many levels this object holds, itself included
      */
-    private function __construct(private array $values)
+    private function __construct(
+        private array $values,
+        private int $depth = 1,
+    ) {
+    }
+
+    /**
+     * How many levels this object holds, itself included.
+     *
+     * The check in `fromNormalized()` counts them once. A caller that nests
+     * this object under another value adds its own levels to this number, and
+     * the sum has to fit `Json::MAX_DEPTH`.
+     */
+    public function depth(): int
     {
+        return $this->depth;
     }
 
     /**
@@ -67,17 +82,17 @@ final readonly class JsonObject implements JsonSerializable, IteratorAggregate, 
      */
     public static function fromNormalized(array $values): self
     {
-        self::assertHoldsOnlyImmutableJson($values, 1, 'data');
-
-        return new self($values);
+        return new self($values, self::checkedDepth($values, 1, 'data'));
     }
 
     /**
+     * The number of levels below this one, and the check of every value.
+     *
      * @param array<array-key, mixed> $values
      *
      * @throws \Expo\Push\Exception\InvalidMessageException
      */
-    private static function assertHoldsOnlyImmutableJson(array $values, int $depth, string $path): void
+    private static function checkedDepth(array $values, int $depth, string $path): int
     {
         if ($depth > Json::MAX_DEPTH) {
             throw new InvalidMessageException(sprintf(
@@ -86,6 +101,8 @@ final readonly class JsonObject implements JsonSerializable, IteratorAggregate, 
                 Json::MAX_DEPTH
             ));
         }
+
+        $deepest = $depth;
 
         /** @var mixed $value */
         foreach ($values as $key => $value) {
@@ -96,11 +113,22 @@ final readonly class JsonObject implements JsonSerializable, IteratorAggregate, 
             }
 
             if ($value instanceof self) {
+                // The nested object counted its own levels when it was built.
+                $deepest = max($deepest, $depth + $value->depth());
+
+                if ($deepest > Json::MAX_DEPTH) {
+                    throw new InvalidMessageException(sprintf(
+                        'The %s nests deeper than %d levels. JSON encoding stops there.',
+                        $here,
+                        Json::MAX_DEPTH
+                    ));
+                }
+
                 continue;
             }
 
             if (is_array($value)) {
-                self::assertHoldsOnlyImmutableJson($value, $depth + 1, $here);
+                $deepest = max($deepest, self::checkedDepth($value, $depth + 1, $here));
 
                 continue;
             }
@@ -138,6 +166,8 @@ final readonly class JsonObject implements JsonSerializable, IteratorAggregate, 
                 get_debug_type($value)
             ));
         }
+
+        return $deepest;
     }
 
     /**

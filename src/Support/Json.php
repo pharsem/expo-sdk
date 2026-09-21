@@ -191,13 +191,29 @@ final class Json
             return self::sameMap($first, $second);
         }
 
-        if (is_float($first) || is_float($second)) {
-            // A float and an int of the same value encode differently, so they
-            // are not the same JSON. NAN never reaches a stored receipt.
-            return is_float($first) && is_float($second) && $first === $second;
+        if ((is_float($first) || is_int($first)) && (is_float($second) || is_int($second))) {
+            // The SDK writes 1 and 1.0 as the same JSON, because its flags hold
+            // no JSON_PRESERVE_ZERO_FRACTION. Two numbers are the same value
+            // when they reach the wire as the same text.
+            return self::numberText($first) === self::numberText($second);
         }
 
         return $first === $second;
+    }
+
+    /**
+     * One number in the text that `encode()` writes for it.
+     *
+     * A value that JSON cannot hold, such as NAN, gets its own marker rather
+     * than an exception: a comparison never raises.
+     */
+    private static function numberText(int|float $value): string
+    {
+        if (is_float($value) && !is_finite($value)) {
+            return is_nan($value) ? 'nan' : ($value > 0 ? 'inf' : '-inf');
+        }
+
+        return json_encode($value, self::FLAGS) ?: 'invalid';
     }
 
     /**
@@ -338,8 +354,18 @@ final class Json
         }
 
         if ($value instanceof JsonObject) {
-            // The value is already a bounded, immutable copy of valid data.
-            // Copying it again would only cost time.
+            // The value is already a bounded, immutable copy of valid data, so
+            // it needs no second copy. It counted its own levels when it was
+            // built, and those levels still have to fit under this one.
+            if ($depth + $value->depth() - 1 > self::MAX_DEPTH) {
+                throw new InvalidMessageException(sprintf(
+                    'The %s nests deeper than %d levels. JSON encoding stops there, and a value that deep is often '
+                    . 'a loop. Flatten the data.',
+                    self::shortPath($path),
+                    self::MAX_DEPTH
+                ));
+            }
+
             return $value;
         }
 

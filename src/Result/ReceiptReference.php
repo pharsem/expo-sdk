@@ -76,7 +76,7 @@ final readonly class ReceiptReference implements JsonSerializable
 
         // A present field of the wrong type is broken data, not an absent one.
         // A correlation that quietly turns into null points at nothing.
-        if ($token !== null && (!is_string($token) || $token === '')) {
+        if ($token !== null && (!is_string($token) || !PushToken::isValid($token))) {
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'token');
         }
 

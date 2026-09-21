@@ -191,14 +191,15 @@ final readonly class RequestFailure implements JsonSerializable
         }
 
         // A send failure names notification positions, and a lookup failure
-        // names receipt IDs. A stored array that holds the other kind does not
-        // come from this SDK.
-        if ($operation === OperationType::Send && $ids !== []) {
-            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'ids');
+        // names receipt IDs. A stored array that holds the other kind, or
+        // neither kind, does not come from this SDK: every request of the SDK
+        // holds at least one notification or one receipt ID.
+        if ($operation === OperationType::Send && ($ids !== [] || $indexes === [])) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'indexes');
         }
 
-        if ($operation === OperationType::Receipts && $indexes !== []) {
-            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'indexes');
+        if ($operation === OperationType::Receipts && ($indexes !== [] || $ids === [])) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'ids');
         }
 
         return new self(

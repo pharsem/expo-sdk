@@ -268,6 +268,9 @@ structured `details` and their device all agree. The order of the keys inside
 devices do not agree, and one answer that knows the device agrees with one that
 does not: the known token only adds what the other one lacks.
 
+Numbers count as the SDK writes them. It sends `1` and `1.0` as the same JSON,
+so two details that differ only in the PHP type are not a conflict.
+
 One limit is worth knowing. The receipt parser turns every nested object inside
 `details` into an array before the SDK stores it, so a nested `{}` and a nested
 `[]` are the same value by the time a merge compares them.
@@ -628,8 +631,16 @@ A stored array must carry what it claims. The reader raises
 - An outcome names the request failure that explains it, by position. The
   position must be in the list, and that failure must have held this
   notification.
-- A recovery value may not claim less than the evidence demands. An outcome
-  that Expo never accepted cannot read as finished work.
+- A recovery value may not claim less than the evidence demands, and it may not
+  claim more. A rejected device reads its disposition from its error code, and
+  work behind a request failure only has to stay open.
+- The acceptance and the evidence must fit each other. Only an accepted
+  notification holds a successful ticket. Every uncertain one carries a
+  duplicate risk, and no rejected one does.
+- A stored token must look like an Expo push token, and every part of one
+  receipt entry names the same device.
+- Every request failure holds at least one notification or one receipt ID. For a
+  send, the failure and the outcome point at each other.
 - A field that is there must be valid. A present field of the wrong type is
   broken data, not an absent field, so a corrupted retry time never reads as
   "retry now".
@@ -722,6 +733,9 @@ $message->data->orderId = 456;   // LogicException: the data is immutable
 
 `JsonObject` reads like a `stdClass` and refuses every write, at every level.
 The change closes the last way to alter a message after you build it.
+
+A `JsonObject` is a value, so you can give one to another message. It counts its
+own nesting once, and the levels of the value that holds it add to that count.
 
 Three habits of `stdClass` do not carry over. Use `toArray()` for the first two:
 

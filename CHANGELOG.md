@@ -59,6 +59,34 @@ go out again, and which evidence has to survive.
   did for an array key.
 - `JsonObject::fromNormalized()` checks what it wraps. Before, a caller could
   wrap a live `stdClass` and reopen the mutation path.
+- A reused `JsonObject` counts its own nesting inside the value that holds it.
+  Before, nesting a valid 512 level object one level down passed the copy and
+  failed at the encode.
+- A limiter that blocks past the operation deadline reports `Deadline`, and it
+  keeps the moment that the limiter asked for. Before, it reported
+  `RateLimited` although the deadline ended the work.
+- A stored recovery value must match the error code of a rejected device. A
+  request failure decides the disposition of its own chunk, so work behind one
+  only has to stay open.
+- The acceptance and the evidence of a stored outcome must fit each other. Only
+  an accepted notification holds a successful ticket. Every uncertain one
+  carries a duplicate risk, and no rejected one does.
+- `PushTicket::fromStorageArray()` and `PushReceipt::fromStorageArray()` reject
+  a present `token`, `message` or `errorCode` of the wrong type. Before, a
+  numeric error code became an unknown error, which turned a permanent
+  rejection into work that waits for a fix.
+- A stored token must look like an Expo push token. Before, a broken one
+  escaped as `InvalidTokenException` from a reader that promises
+  `InvalidStorageException`.
+- Every part of one receipt entry names the same device. Before, an entry
+  without its own token accepted a receipt for one device and a later reference
+  for another.
+- Every request failure holds at least one notification or one receipt ID.
+- A send failure and its outcomes point at each other. Before, only one
+  direction was checked. A lookup keeps the one-way check, because a merge
+  leaves a failed request on the record after a later lookup answers.
+- `Json::sameJson()` compares two numbers as the SDK writes them. Before, `1`
+  and `1.0` read as a conflict although both go on the wire as `1`.
 
 ### Added
 

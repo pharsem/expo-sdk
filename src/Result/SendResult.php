@@ -370,17 +370,18 @@ final readonly class SendResult implements JsonSerializable
     }
 
     /**
-     * Refuses an outcome that points at evidence which is not there.
+     * Refuses an outcome and a request failure that do not agree.
      *
-     * One outcome names the request failure that explains it, by position. A
-     * position outside the list, or a failure that never held this
-     * notification, means that the two lists do not belong together.
+     * One outcome names the request failure that explains it, by position, and
+     * that failure names the notification back. A send builds both sides at
+     * once, so the two lists point at each other or the array is broken.
      *
      * @throws InvalidStorageException
      */
     private function assertFailuresMatchOutcomes(): void
     {
         $count = count($this->requestFailures);
+        $pointsAt = [];
 
         foreach ($this->outcomes as $outcome) {
             $index = $outcome->failureIndex;
@@ -405,6 +406,22 @@ final readonly class SendResult implements JsonSerializable
                     self::STORAGE_TYPE,
                     $outcome->index
                 ));
+            }
+
+            $pointsAt[$index][$outcome->index] = true;
+        }
+
+        foreach ($this->requestFailures as $position => $failure) {
+            foreach ($failure->indexes as $index) {
+                if (!isset($pointsAt[$position][$index])) {
+                    throw new InvalidStorageException(sprintf(
+                        'The stored %s has a request failure at position %d that names index %d, and no outcome '
+                        . 'there points back at it.',
+                        self::STORAGE_TYPE,
+                        $position,
+                        $index
+                    ));
+                }
             }
         }
     }
