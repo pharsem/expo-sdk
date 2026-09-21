@@ -198,6 +198,10 @@ final readonly class SendResult implements JsonSerializable
 
     /**
      * True when every notification is accepted and no request failed.
+     *
+     * The answer reads the evidence, not the label. An outcome that claims
+     * acceptance without a successful ticket and a receipt ID never counts, so
+     * a restored result cannot report more than it can show.
      */
     public function isCompleteSuccess(): bool
     {
@@ -205,8 +209,12 @@ final readonly class SendResult implements JsonSerializable
             return false;
         }
 
+        if ($this->outcomes === []) {
+            return true;
+        }
+
         foreach ($this->outcomes as $outcome) {
-            if (!$outcome->isAccepted()) {
+            if (!$outcome->isAccepted() || $outcome->receiptId() === null) {
                 return false;
             }
         }

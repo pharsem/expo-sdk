@@ -162,23 +162,52 @@ final readonly class RequestFailure implements JsonSerializable
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'category');
         }
 
+        $rawIndexes = $data['indexes'] ?? null;
+
+        if (!is_array($rawIndexes) || !array_is_list($rawIndexes)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'indexes');
+        }
+
         $indexes = [];
 
-        foreach (is_array($data['indexes'] ?? null) ? $data['indexes'] : [] as $index) {
-            if (!is_int($index)) {
+        foreach ($rawIndexes as $index) {
+            if (!is_int($index) || $index < 0) {
                 throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'indexes');
             }
 
             $indexes[] = $index;
         }
 
+        $ids = StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'ids');
+        $ordinal = $data['chunkOrdinal'] ?? null;
+        $message = $data['message'] ?? null;
+
+        if (!is_int($ordinal) || $ordinal < 0) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'chunkOrdinal');
+        }
+
+        if (!is_string($message)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'message');
+        }
+
+        // A send failure names notification positions, and a lookup failure
+        // names receipt IDs. A stored array that holds the other kind does not
+        // come from this SDK.
+        if ($operation === OperationType::Send && $ids !== []) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'ids');
+        }
+
+        if ($operation === OperationType::Receipts && $indexes !== []) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'indexes');
+        }
+
         return new self(
             operation: $operation,
-            chunkOrdinal: is_int($data['chunkOrdinal'] ?? null) ? (int) $data['chunkOrdinal'] : 0,
+            chunkOrdinal: $ordinal,
             indexes: $indexes,
-            ids: StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'ids'),
+            ids: $ids,
             category: $category,
-            message: is_string($data['message'] ?? null) ? (string) $data['message'] : '',
+            message: $message,
             httpStatus: is_int($data['httpStatus'] ?? null) ? (int) $data['httpStatus'] : null,
             transportCode: is_string($data['transportCode'] ?? null) ? (string) $data['transportCode'] : null,
             expoErrors: array_map(
@@ -189,8 +218,11 @@ final readonly class RequestFailure implements JsonSerializable
                 static fn (array $entry): AttemptRecord => AttemptRecord::fromStorageArray($entry),
                 StorageEnvelope::listOfArrays(self::STORAGE_TYPE, $data, 'attempts')
             ),
-            retryable: ($data['retryable'] ?? false) === true,
-            deferred: ($data['deferred'] ?? false) === true,
+            // A missing flag would tell the application that nothing can pass
+            // later, or that the SDK gave up when it only waited. The reader
+            // refuses instead of guessing.
+            retryable: self::requiredBool($data, 'retryable'),
+            deferred: self::requiredBool($data, 'deferred'),
             earliestRetryAtUtcMs: is_int($data['earliestRetryAtUtcMs'] ?? null)
                 ? (int) $data['earliestRetryAtUtcMs']
                 : null,
@@ -204,5 +236,21 @@ final readonly class RequestFailure implements JsonSerializable
     public function jsonSerialize(): array
     {
         return $this->toStorageArray();
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidStorageException
+     */
+    private static function requiredBool(array $data, string $field): bool
+    {
+        $value = $data[$field] ?? null;
+
+        if (!is_bool($value)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
     }
 }

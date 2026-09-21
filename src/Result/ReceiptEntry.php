@@ -170,16 +170,80 @@ final readonly class ReceiptEntry implements JsonSerializable
             );
         }
 
-        return new self(
+        if ($token !== null && (!is_string($token) || $token === '')) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'token');
+        }
+
+        $entry = new self(
             id: $id,
             state: $state,
             receipt: is_array($receipt) ? PushReceipt::fromStorageArray($receipt) : null,
             token: is_string($token) ? new PushToken($token) : null,
-            notificationIndex: is_int($data['notificationIndex'] ?? null) ? (int) $data['notificationIndex'] : null,
-            reference: is_string($data['reference'] ?? null) ? (string) $data['reference'] : null,
-            failureIndex: is_int($data['failureIndex'] ?? null) ? (int) $data['failureIndex'] : null,
+            notificationIndex: self::optionalIndex($data, 'notificationIndex'),
+            reference: self::optionalString($data, 'reference'),
+            failureIndex: self::optionalIndex($data, 'failureIndex'),
             otherReferences: $others,
         );
+
+        // The entry, its receipt and its references all name one notification.
+        // A stored array that gives them two devices is broken, not merged.
+        $receiptToken = $entry->receipt?->token;
+
+        if ($receiptToken !== null && $entry->token !== null && $receiptToken->value !== $entry->token->value) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s holds a receipt of another device. The association is broken.',
+                self::STORAGE_TYPE
+            ));
+        }
+
+        if ($entry->receipt !== null && $entry->receipt->id !== $entry->id) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s holds a receipt with another ID. The association is broken.',
+                self::STORAGE_TYPE
+            ));
+        }
+
+        return $entry;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidStorageException
+     */
+    private static function optionalIndex(array $data, string $field): ?int
+    {
+        $value = $data[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_int($value) || $value < 0) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidStorageException
+     */
+    private static function optionalString(array $data, string $field): ?string
+    {
+        $value = $data[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
     }
 
     /**

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Expo\Push\Result;
 
+use Expo\Push\Exception\InvalidStorageException;
 use Expo\Push\Http\Transmission;
 use Expo\Push\Retry\AttemptResult;
 
@@ -14,6 +15,12 @@ use Expo\Push\Retry\AttemptResult;
  */
 final readonly class AttemptRecord
 {
+    /**
+     * The name that a storage error message uses. An attempt has no envelope of
+     * its own: it always sits inside a request failure.
+     */
+    public const string STORAGE_TYPE = 'expo.attempt_record';
+
     /**
      * @param int          $number        the attempt number, from 1
      * @param AttemptResult $result       what the attempt produced
@@ -57,24 +64,85 @@ final readonly class AttemptRecord
     }
 
     /**
+     * Reads one stored attempt.
+     *
+     * `toStorageArray()` always writes the number, the result and the
+     * transmission, so the reader demands all three. A broken value never
+     * becomes attempt 1 of a transport failure that nobody made.
+     *
      * @param array<string, mixed> $stored
+     *
+     * @throws InvalidStorageException
      */
     public static function fromStorageArray(array $stored): self
     {
+        $number = $stored['number'] ?? null;
+
+        if (!is_int($number) || $number < 1) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'number');
+        }
+
         $result = $stored['result'] ?? null;
         $transmission = $stored['transmission'] ?? null;
 
+        if (!is_string($result) || AttemptResult::tryFrom($result) === null) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'result');
+        }
+
+        if (!is_string($transmission) || Transmission::tryFrom($transmission) === null) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'transmission');
+        }
+
         return new self(
-            number: is_int($stored['number'] ?? null) ? (int) $stored['number'] : 1,
-            result: (is_string($result) ? AttemptResult::tryFrom($result) : null) ?? AttemptResult::TransportFailure,
-            status: is_int($stored['status'] ?? null) ? (int) $stored['status'] : null,
-            code: is_string($stored['code'] ?? null) ? (string) $stored['code'] : null,
-            transmission: (is_string($transmission) ? Transmission::tryFrom($transmission) : null)
-                ?? Transmission::Unknown,
-            durationMs: is_int($stored['durationMs'] ?? null) ? (int) $stored['durationMs'] : null,
-            startedAtUtcMs: is_int($stored['startedAtUtcMs'] ?? null) ? (int) $stored['startedAtUtcMs'] : null,
-            summary: is_string($stored['summary'] ?? null) ? (string) $stored['summary'] : null,
-            serverDelayMs: is_int($stored['serverDelayMs'] ?? null) ? (int) $stored['serverDelayMs'] : null,
+            number: $number,
+            result: AttemptResult::from($result),
+            status: self::optionalInt($stored, 'status'),
+            code: self::optionalString($stored, 'code'),
+            transmission: Transmission::from($transmission),
+            durationMs: self::optionalInt($stored, 'durationMs'),
+            startedAtUtcMs: self::optionalInt($stored, 'startedAtUtcMs'),
+            summary: self::optionalString($stored, 'summary'),
+            serverDelayMs: self::optionalInt($stored, 'serverDelayMs'),
         );
+    }
+
+    /**
+     * @param array<string, mixed> $stored
+     *
+     * @throws InvalidStorageException
+     */
+    private static function optionalInt(array $stored, string $field): ?int
+    {
+        $value = $stored[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_int($value)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<string, mixed> $stored
+     *
+     * @throws InvalidStorageException
+     */
+    private static function optionalString(array $stored, string $field): ?string
+    {
+        $value = $stored[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
     }
 }
