@@ -40,6 +40,15 @@ final readonly class PushMessage implements JsonSerializable
 
     public const string STORAGE_TYPE = 'expo.message';
 
+    /**
+     * The deepest custom data that a message carries.
+     *
+     * The message object itself is one level of the payload that goes on the
+     * wire, so the data field keeps one level less than the JSON limit. A value
+     * that passes this check always encodes inside a message.
+     */
+    public const int MAX_DATA_DEPTH = Json::MAX_DEPTH - 1;
+
     /** @var list<PushToken> */
     public array $to;
 
@@ -646,7 +655,7 @@ final readonly class PushMessage implements JsonSerializable
         }
 
         /** @var array<string, mixed>|JsonObject $snapshot */
-        $snapshot = Json::snapshot($data);
+        $snapshot = Json::snapshot($data, 'data', self::MAX_DATA_DEPTH);
 
         return $snapshot;
     }
@@ -679,7 +688,9 @@ final readonly class PushMessage implements JsonSerializable
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'data');
         }
 
-        if ($value !== [] && array_is_list($value)) {
+        // An empty array and a numeric-keyed array are both a JSON object here.
+        // A list of positions never reaches the data field of a message.
+        if (array_is_list($value)) {
             return (object) $value;
         }
 

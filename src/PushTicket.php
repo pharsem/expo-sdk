@@ -191,10 +191,16 @@ final readonly class PushTicket implements JsonSerializable
         // that turns a permanent rejection into work that waits for a fix.
         $errorCode = self::storedOptionalString($data, 'errorCode');
 
+        // The writer of this SDK emits a string or leaves the field out. A
+        // present value of another type is broken evidence.
+        if ($id !== null && !is_string($id)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'id');
+        }
+
         /** @var array<string, mixed> $details */
         return new self(
             status: $status,
-            id: is_string($id) ? $id : null,
+            id: $id,
             token: self::storedToken($data, 'token'),
             message: self::storedOptionalString($data, 'message'),
             error: $errorCode === null ? null : PushError::tryFrom($errorCode),

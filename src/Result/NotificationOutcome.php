@@ -194,7 +194,9 @@ final readonly class NotificationOutcome implements JsonSerializable
 
         $token = $data['token'] ?? null;
 
-        if (!is_string($token) || $token === '') {
+        // A token of the wrong shape must raise a storage error, not escape as
+        // an InvalidTokenException from the constructor.
+        if (!is_string($token) || !PushToken::isValid($token)) {
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'token');
         }
 
@@ -343,6 +345,15 @@ final readonly class NotificationOutcome implements JsonSerializable
         if ($acceptance === Acceptance::NotAccepted && $duplicateRisk) {
             throw new InvalidStorageException(sprintf(
                 'The stored %s is not accepted and carries a duplicate risk. The two contradict each other.',
+                self::STORAGE_TYPE
+            ));
+        }
+
+        // An error ticket proves that Expo answered, so the reason is a
+        // rejection. "Not transmitted" belongs to a chunk that never arrived.
+        if ($ticket?->isError() === true && $reason === NotAcceptedReason::NotTransmitted) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s holds a rejection ticket and the reason "not_transmitted". Expo answered it.',
                 self::STORAGE_TYPE
             ));
         }

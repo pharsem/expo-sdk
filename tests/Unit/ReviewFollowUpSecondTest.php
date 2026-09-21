@@ -55,7 +55,7 @@ final class ReviewFollowUpSecondTest extends TestCase
         self::assertGreaterThan(1_000, strlen(Json::encode($inner)));
 
         $this->expectException(InvalidMessageException::class);
-        $this->expectExceptionMessage('nests deeper than 512 levels');
+        $this->expectExceptionMessage('nests deeper than 511 levels');
 
         self::ignoreResult(PushMessage::to(self::TOKEN_A)->data(['wrap' => $inner]));
     }

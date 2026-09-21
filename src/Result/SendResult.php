@@ -383,6 +383,17 @@ final readonly class SendResult implements JsonSerializable
         $count = count($this->requestFailures);
         $pointsAt = [];
 
+        foreach ($this->requestFailures as $position => $failure) {
+            if ($failure->operation !== OperationType::Send) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s holds a %s failure at position %d. A send holds only send failures.',
+                    self::STORAGE_TYPE,
+                    $failure->operation->value,
+                    $position
+                ));
+            }
+        }
+
         foreach ($this->outcomes as $outcome) {
             $index = $outcome->failureIndex;
 

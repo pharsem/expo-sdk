@@ -258,11 +258,16 @@ final readonly class JsonObject implements JsonSerializable, IteratorAggregate, 
     }
 
     /**
+     * Every key of this object, as the JSON names them.
+     *
+     * PHP turns a numeric property name into an integer array key, so the
+     * answer casts them back to the strings that the JSON holds.
+     *
      * @return list<string>
      */
     public function keys(): array
     {
-        return array_keys($this->values);
+        return array_map(strval(...), array_keys($this->values));
     }
 
     #[\Override]

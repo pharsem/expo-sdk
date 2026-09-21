@@ -271,6 +271,14 @@ does not: the known token only adds what the other one lacks.
 Numbers count as the SDK writes them. It sends `1` and `1.0` as the same JSON,
 so two details that differ only in the PHP type are not a conflict.
 
+The comparison is bounded. `PushReceipt::$details` is public, so an application
+can build one that loops. A value that the comparison cannot walk to the end
+counts as different, and the ID goes to `conflicts()`.
+
+A merge keeps one device for one receipt ID. Two answers that name two devices
+are a conflict, the first device stays, and the correlation of the other one
+does not join the entry.
+
 One limit is worth knowing. The receipt parser turns every nested object inside
 `details` into an array before the SDK stores it, so a nested `{}` and a nested
 `[]` are the same value by the time a merge compares them.
@@ -639,8 +647,11 @@ A stored array must carry what it claims. The reader raises
   duplicate risk, and no rejected one does.
 - A stored token must look like an Expo push token, and every part of one
   receipt entry names the same device.
-- Every request failure holds at least one notification or one receipt ID. For a
-  send, the failure and the outcome point at each other.
+- Every request failure holds at least one notification or one receipt ID, and
+  it belongs to the operation of the result that holds it. For a send, the
+  failure and the outcome point at each other.
+- A stored token must look like an Expo push token in every reader, and a
+  present optional field of the wrong type raises everywhere.
 - A field that is there must be valid. A present field of the wrong type is
   broken data, not an absent field, so a corrupted retry time never reads as
   "retry now".
@@ -714,8 +725,9 @@ wrote, and gives the device token back.
   message gives back.
 - Invalid UTF-8, `NAN`, `INF`, a resource and any object other than `stdClass`
   raise `InvalidMessageException` before any request.
-- Data deeper than 512 levels raises as well, and so does a value that refers
-  back to itself. The limit is the nesting limit of `json_encode()`.
+- Data deeper than 511 levels raises as well, and so does a value that refers
+  back to itself. `json_encode()` stops at 512 levels, and the message object
+  itself is one of them. `PushMessage::MAX_DATA_DEPTH` holds the number.
 
 ### The data that a message gives back
 
@@ -736,6 +748,9 @@ The change closes the last way to alter a message after you build it.
 
 A `JsonObject` is a value, so you can give one to another message. It counts its
 own nesting once, and the levels of the value that holds it add to that count.
+
+`keys()` gives back the names that the JSON holds. PHP turns a numeric property
+name into an integer array key, and `toArray()` shows that raw form.
 
 Three habits of `stdClass` do not carry over. Use `toArray()` for the first two:
 

@@ -82,7 +82,9 @@ final class RecursiveDataTest extends TestCase
         }
 
         $this->expectException(InvalidMessageException::class);
-        $this->expectExceptionMessage('nests deeper than 512 levels');
+        // The message object itself is one level of the payload, so the data
+        // field keeps one level less than the JSON limit.
+        $this->expectExceptionMessage('nests deeper than 511 levels');
 
         self::ignoreResult(PushMessage::to(self::TOKEN_A)->data($deep));
     }
@@ -143,7 +145,30 @@ final class RecursiveDataTest extends TestCase
 
         $message = PushMessage::to(self::TOKEN_A)->data($deep);
 
+        self::assertSame(PushMessage::MAX_DATA_DEPTH, 511);
         self::assertGreaterThan(1_000, strlen(Json::encode($message->data)));
+        // The whole payload encodes too, envelope included.
+        self::assertGreaterThan(1_000, $message->sizeInBytes());
+    }
+
+    /**
+     * One level more than the limit builds, and then fails at the encode.
+     *
+     * The reserved level is what stops that: a value that passes the copy
+     * always fits the payload that carries it.
+     */
+    public function testOneLevelPastTheDataLimitIsRejectedBeforeTheEncode(): void
+    {
+        $deep = ['leaf' => 1];
+
+        for ($i = 0; $i < PushMessage::MAX_DATA_DEPTH; ++$i) {
+            $deep = ['n' => $deep];
+        }
+
+        $this->expectException(InvalidMessageException::class);
+        $this->expectExceptionMessage('nests deeper than 511 levels');
+
+        self::ignoreResult(PushMessage::to(self::TOKEN_A)->data($deep));
     }
 
     /**

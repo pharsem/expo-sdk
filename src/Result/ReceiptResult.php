@@ -366,6 +366,13 @@ final readonly class ReceiptResult implements JsonSerializable
             $notificationIndex = $current->notificationIndex ?? $entry->notificationIndex;
             $reference = $current->reference ?? $entry->reference;
             $others = self::joinReferences($current, $entry);
+            $winning = self::firstToken($token, $current->receipt, $entry->receipt);
+
+            // One receipt ID belongs to one notification, and therefore to one
+            // device. A reference that names another device is a contradiction,
+            // not a correlation: `conflicts()` records it, and the entry drops
+            // it rather than claiming two devices.
+            $others = self::withoutOtherDevices($others, $winning);
 
             if ($current->isReturned() && $entry->isReturned()) {
                 if (!self::sameReceipt($current->receipt, $entry->receipt) && !isset($seenConflicts[$entry->id])) {
@@ -502,6 +509,17 @@ final readonly class ReceiptResult implements JsonSerializable
     {
         $count = count($this->requestFailures);
 
+        foreach ($this->requestFailures as $position => $failure) {
+            if ($failure->operation !== OperationType::Receipts) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s holds a %s failure at position %d. A lookup holds only lookup failures.',
+                    self::STORAGE_TYPE,
+                    $failure->operation->value,
+                    $position
+                ));
+            }
+        }
+
         foreach ($this->entries as $entry) {
             $index = $entry->failureIndex;
 
@@ -552,6 +570,42 @@ final readonly class ReceiptResult implements JsonSerializable
         }
 
         return $ids;
+    }
+
+    /**
+     * The first device that any of these parts names, or null.
+     */
+    private static function firstToken(?PushToken $token, ?PushReceipt $first, ?PushReceipt $second): ?PushToken
+    {
+        if ($token !== null) {
+            return $token;
+        }
+
+        if ($first !== null && $first->token !== null) {
+            return $first->token;
+        }
+
+        return $second?->token;
+    }
+
+    /**
+     * The references that name the device of the entry, or no device at all.
+     *
+     * @param list<ReceiptReference> $references
+     *
+     * @return list<ReceiptReference>
+     */
+    private static function withoutOtherDevices(array $references, ?PushToken $device): array
+    {
+        if ($device === null) {
+            return $references;
+        }
+
+        return array_values(array_filter(
+            $references,
+            static fn (ReceiptReference $reference): bool => $reference->token === null
+                || $reference->token->value === $device->value
+        ));
     }
 
     /**

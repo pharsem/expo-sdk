@@ -186,6 +186,14 @@ final class Scheduler
                 return;
             }
 
+            // The deadline speaks before an earlier failure does. A chunk that
+            // the deadline caught reports the deadline, not a skip.
+            if ($deadline !== null && $this->clock->monotonicMillis() >= $deadline) {
+                $this->failDeadline($chunk);
+
+                continue;
+            }
+
             if ($this->stopped && !$this->continueAfterFailure && !$chunk->wasDispatched()) {
                 // The chunk never went out, so it keeps whatever retry guidance
                 // the operation already holds. A cooldown of the bucket still
@@ -236,9 +244,10 @@ final class Scheduler
                 $wait = max(1, $decision->retryAfterMs);
                 $this->extendCooldown($now + $wait, $this->clock->nowUtcMillis() + $wait);
 
-                // The cooldown of the limiter is on the record now, so the
-                // deadline can end the chunk without losing that moment.
-                if ($deadline !== null && $now >= $deadline) {
+                // The cooldown of the limiter is on the record now, so a spent
+                // budget can end the chunk without losing that moment. The
+                // chunk budget counts here as well as the operation deadline.
+                if (!$chunk->canDispatch($now, $this->remaining($deadline, $now))) {
                     $this->failDeadline($chunk);
 
                     continue;
@@ -420,7 +429,9 @@ final class Scheduler
     {
         $chunk->skip(
             FailureCategory::Deadline,
-            'the remaining budget of this chunk ran out before the request started',
+            $chunk->wasDispatched()
+                ? 'the remaining budget of this chunk ran out before it could go out again'
+                : 'the remaining budget of this chunk ran out before the request started',
             $this->cooldownUntilUtc ?? $this->clock->nowUtcMillis(),
         );
         $this->emitFinished($chunk);

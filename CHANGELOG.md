@@ -87,6 +87,28 @@ go out again, and which evidence has to survive.
   leaves a failed request on the record after a later lookup answers.
 - `Json::sameJson()` compares two numbers as the SDK writes them. Before, `1`
   and `1.0` read as a conflict although both go on the wire as `1`.
+- `Json::sameJson()` is bounded. The public details of a receipt accept any
+  array, so a value that loops exhausted the memory of the process before.
+- Every chunk that the operation deadline catches reports `Deadline`. Before, a
+  chunk behind one that the deadline caught could report `Skipped`.
+- A limiter that spends the chunk budget reports `Deadline` as well, and it
+  keeps the cooldown that the limiter asked for.
+- An empty stored data object comes back as an object. Before, it came back as
+  an array, and `withDatum()` with a numeric key then failed on the restored
+  message.
+- A present ticket `id` of the wrong type raises. Before, an error ticket lost
+  that evidence in silence.
+- `NotificationOutcome::fromStorageArray()` checks the token shape, as the
+  other readers already did.
+- A stored outcome with a rejection ticket cannot carry the reason
+  `NotTransmitted`. Expo answered it, so the reason is a rejection.
+- A merge of two devices for one receipt ID keeps one device, and the
+  correlation of the other one does not join the entry. Before, the merged
+  result could not read its own storage.
+- A result holds only the failures of its own operation.
+- `JsonObject::keys()` gives back strings. PHP turns a numeric property name
+  into an integer array key, and the declared type promised strings.
+
 
 ### Added
 
@@ -100,6 +122,7 @@ go out again, and which evidence has to survive.
 - `Json::MAX_DEPTH`, the documented nesting limit of 512 levels, and
   `Json::sameJson()` for a semantic comparison of two decoded values.
 - A benchmark step that measures the bounded data copy.
+- `PushMessage::MAX_DATA_DEPTH` and `JsonObject::depth()`.
 
 ### Changed
 

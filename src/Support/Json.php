@@ -165,8 +165,15 @@ final class Json
      * `stdClass` and a `JsonObject` with the same keys are equal, and an object
      * never equals a list.
      */
-    public static function sameJson(mixed $first, mixed $second): bool
+    public static function sameJson(mixed $first, mixed $second, int $depth = 1): bool
     {
+        // A comparison never raises, and it never runs away either. The public
+        // details of a receipt accept any array, so a value that loops or
+        // nests too deep counts as different rather than as a crash.
+        if ($depth > self::MAX_DEPTH) {
+            return false;
+        }
+
         $firstMap = self::asObjectMap($first);
         $secondMap = self::asObjectMap($second);
 
@@ -175,7 +182,7 @@ final class Json
                 return false;
             }
 
-            return self::sameMap($firstMap, $secondMap);
+            return self::sameMap($firstMap, $secondMap, $depth);
         }
 
         if (is_array($first) || is_array($second)) {
@@ -188,7 +195,7 @@ final class Json
                 return false;
             }
 
-            return self::sameMap($first, $second);
+            return self::sameMap($first, $second, $depth);
         }
 
         if ((is_float($first) || is_int($first)) && (is_float($second) || is_int($second))) {
@@ -240,7 +247,7 @@ final class Json
      * @param array<array-key, mixed> $first
      * @param array<array-key, mixed> $second
      */
-    private static function sameMap(array $first, array $second): bool
+    private static function sameMap(array $first, array $second, int $depth): bool
     {
         if (count($first) !== count($second)) {
             return false;
@@ -252,7 +259,7 @@ final class Json
                 return false;
             }
 
-            if (!self::sameJson($value, $second[$key])) {
+            if (!self::sameJson($value, $second[$key], $depth + 1)) {
                 return false;
             }
         }
@@ -284,9 +291,9 @@ final class Json
      *
      * @throws InvalidMessageException
      */
-    public static function snapshot(mixed $value, string $path = 'data'): mixed
+    public static function snapshot(mixed $value, string $path = 'data', int $maxDepth = self::MAX_DEPTH): mixed
     {
-        return self::copy($value, $path, 1, []);
+        return self::copy($value, $path, 1, [], $maxDepth);
     }
 
     /**
@@ -309,7 +316,7 @@ final class Json
      *
      * @throws InvalidMessageException
      */
-    private static function copy(mixed $value, string $path, int $depth, array $ancestors): mixed
+    private static function copy(mixed $value, string $path, int $depth, array $ancestors, int $maxDepth): mixed
     {
         if ($value === null || is_scalar($value)) {
             if (is_float($value) && !is_finite($value)) {
@@ -327,12 +334,12 @@ final class Json
             return $value;
         }
 
-        if ($depth > self::MAX_DEPTH) {
+        if ($depth > $maxDepth) {
             throw new InvalidMessageException(sprintf(
                 'The %s nests deeper than %d levels. JSON encoding stops there, and a value that deep is often a '
                 . 'loop. Flatten the data.',
                 self::shortPath($path),
-                self::MAX_DEPTH
+                $maxDepth
             ));
         }
 
@@ -346,7 +353,7 @@ final class Json
                 }
 
                 /** @var mixed $copied */
-                $copied = self::copy($item, $path . '.' . $key, $depth + 1, $ancestors);
+                $copied = self::copy($item, $path . '.' . $key, $depth + 1, $ancestors, $maxDepth);
                 $copy[$key] = $copied;
             }
 
@@ -357,12 +364,12 @@ final class Json
             // The value is already a bounded, immutable copy of valid data, so
             // it needs no second copy. It counted its own levels when it was
             // built, and those levels still have to fit under this one.
-            if ($depth + $value->depth() - 1 > self::MAX_DEPTH) {
+            if ($depth + $value->depth() - 1 > $maxDepth) {
                 throw new InvalidMessageException(sprintf(
                     'The %s nests deeper than %d levels. JSON encoding stops there, and a value that deep is often '
                     . 'a loop. Flatten the data.',
                     self::shortPath($path),
-                    self::MAX_DEPTH
+                    $maxDepth
                 ));
             }
 
@@ -395,7 +402,7 @@ final class Json
                 }
 
                 /** @var mixed $copied */
-                $copied = self::copy($item, $path . '.' . $key, $depth + 1, $ancestors);
+                $copied = self::copy($item, $path . '.' . $key, $depth + 1, $ancestors, $maxDepth);
                 $copy[$key] = $copied;
             }
 
