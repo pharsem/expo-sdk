@@ -168,7 +168,7 @@ final readonly class PushMessage implements JsonSerializable
     public function body(?string $body): self
     {
         return $this->with('body', $body);
-    }Move 
+    }
 
     #[\NoDiscard('Use the new message that this method returns.')]
     public function subtitle(?string $subtitle): self
