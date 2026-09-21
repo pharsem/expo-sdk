@@ -11,6 +11,7 @@ use Expo\Push\PushReceipt;
 use Expo\Push\PushToken;
 use Expo\Push\ReceiptCollection;
 use Expo\Push\Storage\StorageEnvelope;
+use Expo\Push\Support\Json;
 use JsonSerializable;
 
 /**
@@ -295,10 +296,20 @@ final readonly class ReceiptResult implements JsonSerializable
      * The rules:
      *
      * - A returned receipt never falls back to missing, malformed or failed.
-     * - The same receipt twice stays one entry.
+     * - The same receipt twice stays one entry. Two receipts are the same when
+     *   their status, their error code, their message and their structured
+     *   details all agree. Key order inside the details means nothing, and a
+     *   JSON object never equals a JSON list.
      * - Two returned receipts that do not agree keep the first one, and the ID
      *   goes to `conflicts()`.
      * - An ID that only the other result holds joins at the end.
+     *
+     * A conflict never goes away. The result unites the conflicts of both
+     * inputs before it looks for new ones, so it makes no difference which side
+     * already knew about one, or how a chain of merges was grouped.
+     *
+     * The resolution rules read in order, so `a->merge($b)` and `b->merge($a)`
+     * can keep different receipts. The conflict list of the two is the same.
      */
     #[\NoDiscard]
     public function merge(self $other): self
@@ -312,7 +323,17 @@ final readonly class ReceiptResult implements JsonSerializable
             $index[$entry->id] = $position;
         }
 
-        $conflicts = $this->conflicts;
+        // Both sides bring what they already knew. A contradiction that one
+        // lookup found must not vanish because the other side is the receiver.
+        $conflicts = [];
+        $seenConflicts = [];
+
+        foreach ([...$this->conflicts, ...$other->conflicts] as $id) {
+            if (!isset($seenConflicts[$id])) {
+                $seenConflicts[$id] = true;
+                $conflicts[] = $id;
+            }
+        }
 
         foreach ($other->entries as $entry) {
             $shifted = $entry->failureIndex === null ? null : $entry->failureIndex + $offset;
@@ -347,7 +368,8 @@ final readonly class ReceiptResult implements JsonSerializable
             $others = self::joinReferences($current, $entry);
 
             if ($current->isReturned() && $entry->isReturned()) {
-                if (!self::sameReceipt($current->receipt, $entry->receipt) && !in_array($entry->id, $conflicts, true)) {
+                if (!self::sameReceipt($current->receipt, $entry->receipt) && !isset($seenConflicts[$entry->id])) {
+                    $seenConflicts[$entry->id] = true;
                     $conflicts[] = $entry->id;
                 }
 
@@ -546,6 +568,13 @@ final readonly class ReceiptResult implements JsonSerializable
         };
     }
 
+    /**
+     * True when two receipts say the same thing about the same notification.
+     *
+     * The comparison reads the structured details as well. A detail that
+     * changed is a real contradiction, and the order of the keys inside the
+     * details is not.
+     */
     private static function sameReceipt(?PushReceipt $first, ?PushReceipt $second): bool
     {
         if ($first === null || $second === null) {
@@ -554,6 +583,7 @@ final readonly class ReceiptResult implements JsonSerializable
 
         return $first->status === $second->status
             && $first->errorCode === $second->errorCode
-            && $first->message === $second->message;
+            && $first->message === $second->message
+            && Json::sameJson($first->details, $second->details);
     }
 }
