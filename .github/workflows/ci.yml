@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: PHP ${{ matrix.php }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        php: ['8.3', '8.4', '8.5']
+        include:
+          - os: windows-latest
+            php: '8.5'
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, json, mbstring, zlib
+          coverage: none
+          ini-values: error_reporting=E_ALL
+
+      - name: Install the dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Run the tests
+        run: vendor/bin/phpunit
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, json, mbstring, zlib
+          coverage: none
+
+      - name: Install the dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Run PHPStan
+        run: vendor/bin/phpstan analyse --no-progress
+
+  composer:
+    name: Validate composer.json
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Validate
+        run: composer validate --strict
