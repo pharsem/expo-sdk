@@ -23,7 +23,7 @@ count($result->notAttempted());  // the SDK never sent these
   optional observer.
 - Static analysis at PHPStan level 8.
 
-Coming from 1.0? Read [MIGRATION.md](MIGRATION.md).
+Coming from 1.0 or 2.0? Read [MIGRATION.md](MIGRATION.md).
 
 ## Install
 
@@ -952,14 +952,14 @@ The package follows [semantic versioning](https://semver.org/).
 ```json
 {
     "require": {
-        "pharsem/expo-sdk": "^2.0"
+        "pharsem/expo-sdk": "^3.0"
     }
 }
 ```
 
 [CONTRIBUTING.md](CONTRIBUTING.md) names the parts of the code that the contract
 covers. [CHANGELOG.md](CHANGELOG.md) lists every release.
-[MIGRATION.md](MIGRATION.md) takes you from 1.0 to 2.0.
+[MIGRATION.md](MIGRATION.md) takes you from 1.0 to 2.0, and from 2.0 to 3.0.
 
 ## License
 

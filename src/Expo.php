@@ -62,7 +62,7 @@ use stdClass;
  */
 final readonly class Expo
 {
-    public const string VERSION = '2.0.0';
+    public const string VERSION = '3.0.0';
 
     /**
      * The largest number of notifications in one send request, from the Expo API

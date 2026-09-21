@@ -2,7 +2,7 @@
 
 This project uses [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 3.0.0 - 2026-09-21
 
 A reliability patch. Recovery, scheduling, persistence and merging now tell one
 consistent story about what Expo accepted, what stays uncertain, when work can
@@ -152,8 +152,9 @@ contract in [CONTRIBUTING.md](CONTRIBUTING.md):
    2.0.0 wrote still reads. An array that something else wrote, with a missing
    or wrongly typed field, now raises `InvalidStorageException`.
 
-Nothing here publishes a release. The version number stays for the maintainer to
-choose.
+Each of the three is a major change under the contract in
+[CONTRIBUTING.md](CONTRIBUTING.md), so this release carries the major number.
+[MIGRATION.md](MIGRATION.md) takes you from 2.0 to 3.0.
 
 ## 2.0.0 - 2026-09-21
 
