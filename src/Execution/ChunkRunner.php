@@ -47,6 +47,23 @@ final class ChunkRunner
 
     private ?int $waitUntilMonotonic = null;
 
+    /**
+     * The same moment as `$waitUntilMonotonic`, in UTC milliseconds.
+     *
+     * A monotonic value means nothing to another process, so a chunk that ends
+     * while it waits reports this one instead.
+     */
+    private ?int $waitUntilUtc = null;
+
+    private ?int $serverCooldownUntilMonotonic = null;
+
+    private ?int $serverCooldownUntilUtc = null;
+
+    private ?int $lastStatus = null;
+
+    /** @var list<ExpoApiError> */
+    private array $lastApiErrors = [];
+
     private ?int $attemptStartedMonotonic = null;
 
     private ?int $attemptStartedUtc = null;
@@ -176,7 +193,47 @@ final class ChunkRunner
     }
 
     /**
+     * The milliseconds that the strictest enforceable budget leaves.
+     *
+     * The value covers the chunk budget and the operation deadline together. A
+     * value of zero or less means that no request may start.
+     *
+     * @param int|null $remainingOperationMs what the whole operation deadline leaves, or null
+     */
+    public function remainingEnforceableMs(int $nowMonotonic, ?int $remainingOperationMs = null): int
+    {
+        $remaining = $this->remainingBudgetMs($nowMonotonic);
+
+        if ($remainingOperationMs !== null) {
+            $remaining = min($remaining, $remainingOperationMs);
+        }
+
+        return $remaining;
+    }
+
+    /**
+     * True when a request of this chunk may still start.
+     *
+     * The scheduler asks before every permit and again before every dispatch. A
+     * budget that ran out never becomes an unbounded request.
+     *
+     * @param int|null $remainingOperationMs what the whole operation deadline leaves, or null
+     */
+    public function canDispatch(int $nowMonotonic, ?int $remainingOperationMs = null): bool
+    {
+        // The budget starts at the first activation. A chunk that never became
+        // active holds its whole budget, so only the operation deadline can
+        // stop it here.
+        return $this->remainingEnforceableMs($nowMonotonic, $remainingOperationMs) > 0;
+    }
+
+    /**
      * Builds the request of the next attempt and marks the chunk in flight.
+     *
+     * The timeout of the request never outlives the strictest remaining budget.
+     * An exhausted budget is not a licence for an unbounded request: the
+     * scheduler asks `canDispatch()` first, and this method clamps whatever is
+     * left to at least one millisecond.
      *
      * @param int|null $remainingOperationMs what the whole operation deadline leaves, or null
      */
@@ -187,20 +244,13 @@ final class ChunkRunner
         ++$this->attempt;
         $this->state = ChunkState::InFlight;
         $this->waitUntilMonotonic = null;
+        $this->waitUntilUtc = null;
         $this->dispatched = true;
         $this->attemptStartedMonotonic = $nowMonotonic;
         $this->attemptStartedUtc = $this->clock->nowUtcMillis();
 
-        $timeout = $this->request->timeoutMs;
-        $budget = $this->remainingBudgetMs($nowMonotonic);
-
-        if ($budget > 0) {
-            $timeout = min($timeout, $budget);
-        }
-
-        if ($remainingOperationMs !== null && $remainingOperationMs > 0) {
-            $timeout = min($timeout, $remainingOperationMs);
-        }
+        $limit = $this->remainingEnforceableMs($nowMonotonic, $remainingOperationMs);
+        $timeout = min($this->request->timeoutMs, max(1, $limit));
 
         return $timeout === $this->request->timeoutMs ? $this->request : $this->request->withTimeoutMs($timeout);
     }
@@ -220,6 +270,22 @@ final class ChunkRunner
         }
 
         $this->serverRefused = $outcome->serverRefused();
+        $this->lastStatus = $outcome->status;
+        $this->lastApiErrors = $apiErrors;
+
+        // The server spoke for the whole project, not for this chunk alone. The
+        // cooldown outlives the attempt so that the scheduler can hold the other
+        // chunks of the same bucket back as well.
+        if ($outcome->serverDelayMs !== null) {
+            $this->serverCooldownUntilMonotonic = self::later(
+                $this->serverCooldownUntilMonotonic,
+                $nowMonotonic + $outcome->serverDelayMs
+            );
+            $this->serverCooldownUntilUtc = self::later(
+                $this->serverCooldownUntilUtc,
+                $nowUtc + $outcome->serverDelayMs
+            );
+        }
 
         $this->attempts[] = new AttemptRecord(
             number: $this->attempt,
@@ -294,17 +360,23 @@ final class ChunkRunner
 
         $this->state = ChunkState::Waiting;
         $this->waitUntilMonotonic = $nowMonotonic + $delay;
+        $this->waitUntilUtc = $nowUtc + $delay;
     }
 
     /**
-     * The delay that the rate limiter asked for.
+     * The delay that a rate limit asked for, local or from the server.
      *
      * The chunk waits when the delay fits the budget, and it defers when it does
-     * not. The limiter never sleeps: the SDK schedules the wait.
+     * not. Neither the limiter nor the server sleeps: the SDK schedules the wait.
+     *
+     * The SDK never shortens the delay to fit a local cap. A delay that does not
+     * fit becomes a deferral that names the moment.
+     *
+     * @param string $source a redacted phrase that names who asked for the wait
      *
      * @return bool true when the chunk waits, false when it reached a final state
      */
-    public function waitForPermit(int $waitMs, int $nowMonotonic, string $bucket): bool
+    public function waitForCooldown(int $waitMs, int $nowMonotonic, string $source): bool
     {
         $this->markActivated($nowMonotonic);
 
@@ -315,17 +387,17 @@ final class ChunkRunner
         if ($waitMs > $settings->maxInlineWaitMs || $waitMs >= $remaining) {
             $this->outcome = new ChunkOutcome(
                 succeeded: false,
+                response: $this->lastParsed,
                 category: FailureCategory::RateLimited,
-                message: sprintf(
-                    'the rate limiter of bucket "%s" asks for %d ms, and the chunk cannot wait that long',
-                    $bucket,
-                    $waitMs
-                ),
+                message: sprintf('%s asks for %d ms, and the chunk cannot wait that long', $source, $waitMs),
+                httpStatus: $this->lastStatus,
+                expoErrors: $this->lastApiErrors,
                 attempts: $this->attempts,
                 retryable: true,
                 deferred: true,
                 earliestRetryAtUtcMs: $nowUtc + $waitMs,
                 anyAmbiguousAttempt: $this->anyAmbiguous,
+                serverRefused: $this->serverRefused,
                 dispatched: $this->dispatched,
                 warnings: $this->warnings,
             );
@@ -336,6 +408,7 @@ final class ChunkRunner
 
         $this->state = ChunkState::Waiting;
         $this->waitUntilMonotonic = $nowMonotonic + max(1, $waitMs);
+        $this->waitUntilUtc = $nowUtc + max(1, $waitMs);
 
         return true;
     }
@@ -345,27 +418,78 @@ final class ChunkRunner
      *
      * The scheduler calls this when an earlier chunk failed, when the operation
      * deadline ran out, or when the rate limiter itself failed.
+     *
+     * The chunk keeps whatever retry guidance it already holds. A chunk that
+     * waits for a backoff and then meets the operation deadline still reports
+     * the moment at which that backoff ends.
+     *
+     * @param bool $retryable false when the reason behind the skip needs an
+     *                        application decision, such as a credential failure
+     *                        or a limiter that broke
      */
-    public function skip(FailureCategory $category, string $message, ?int $earliestRetryAtUtcMs = null): void
-    {
+    public function skip(
+        FailureCategory $category,
+        string $message,
+        ?int $earliestRetryAtUtcMs = null,
+        bool $retryable = true,
+    ): void {
         if ($this->state === ChunkState::Done) {
             return;
         }
 
         $this->outcome = new ChunkOutcome(
             succeeded: false,
+            response: $this->lastParsed,
             category: $category,
             message: $message,
+            httpStatus: $this->lastStatus,
+            expoErrors: $this->lastApiErrors,
             attempts: $this->attempts,
-            retryable: true,
+            retryable: $retryable,
             deferred: true,
-            earliestRetryAtUtcMs: $earliestRetryAtUtcMs,
+            earliestRetryAtUtcMs: self::later($earliestRetryAtUtcMs, $this->waitUntilUtc),
             anyAmbiguousAttempt: $this->anyAmbiguous,
             serverRefused: $this->serverRefused,
             dispatched: $this->dispatched,
             warnings: $this->warnings,
         );
         $this->state = ChunkState::Done;
+    }
+
+    /**
+     * The monotonic moment until which the server asked this project to wait.
+     *
+     * The value comes from the `Retry-After` header of the last answer that
+     * carried one. It outlives the attempt, so the scheduler can hold the other
+     * chunks of the same bucket back as well.
+     */
+    public function serverCooldownUntil(): ?int
+    {
+        return $this->serverCooldownUntilMonotonic;
+    }
+
+    /**
+     * The same moment as `serverCooldownUntil()`, in UTC milliseconds.
+     */
+    public function serverCooldownUntilUtc(): ?int
+    {
+        return $this->serverCooldownUntilUtc;
+    }
+
+    /**
+     * The largest of two moments, when at least one of them exists.
+     */
+    private static function later(?int $first, ?int $second): ?int
+    {
+        if ($first === null) {
+            return $second;
+        }
+
+        if ($second === null) {
+            return $first;
+        }
+
+        return max($first, $second);
     }
 
     /**
