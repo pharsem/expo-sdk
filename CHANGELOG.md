@@ -2,6 +2,81 @@
 
 This project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+A reliability patch. Recovery, scheduling, persistence and merging now tell one
+consistent story about what Expo accepted, what stays uncertain, when work can
+go out again, and which evidence has to survive.
+
+### Fixed
+
+- `recoverable()` keeps a notification that Expo refused for a transient
+  reason. A 429 with a `Retry-After` header left the worklist before, because
+  the selection read the acceptance alone. It now reads the acceptance and the
+  recovery disposition together.
+- A server `Retry-After` holds back every chunk of the bucket. Before, it held
+  back only the chunk that received it, so a fresh chunk started in the freed
+  slot and walked past a delay that the project already owed.
+- `operationDeadlineMs` bounds every wait. Before, the scheduler could sleep a
+  five second retry delay inside a 100 millisecond call. A chunk with a spent
+  budget could also build another request, and its timeout lost its clamp.
+- `PushMessage` rejects recursive and excessively deep data with
+  `InvalidMessageException`. Before, the copy walked the value until PHP ran out
+  of memory, which ended the process instead of raising.
+- The storage readers check the evidence of every claim. Before, an accepted
+  outcome could come back without a ticket, a broken index became zero, and a
+  missing `duplicateRisk` became "no risk".
+- `ReceiptResult::merge()` unites the conflicts of both sides. Before, it kept
+  only the conflicts of the left operand. Receipt equality now reads the
+  structured `details` as well, and ignores the order of their keys.
+- A message is immutable at every level. Before, a public read of the `data`
+  property handed out the stored `stdClass`, so
+  `$message->data->orderId = 456` changed the payload.
+
+### Added
+
+- `NotificationOutcome::$recovery`, a `RecoveryDisposition` of `None`,
+  `Retryable` or `NeedsIntervention`, plus `isOpen()`, `isRetryable()`,
+  `needsIntervention()` and `isDueAt()`.
+- `RecoverableWork::retryable()`, `needsIntervention()` and `dueAt()`. The
+  `summary()` array gains a `retryable` and a `needsIntervention` count.
+- `Expo\Push\Support\JsonObject`, the immutable form of a JSON object. It
+  reads like a `stdClass` and refuses every write.
+- `Json::MAX_DEPTH`, the documented nesting limit of 512 levels, and
+  `Json::sameJson()` for a semantic comparison of two decoded values.
+- A benchmark step that measures the bounded data copy.
+
+### Changed
+
+- `PushMessage::$data` holds an `array` or a `JsonObject`, no longer a
+  `stdClass`. A read of a key still works. `get_object_vars()`, an `(array)`
+  cast and an `instanceof stdClass` check do not: use `toArray()`.
+- A chunk that the operation deadline caught reports `FailureCategory::Deadline`
+  instead of `Skipped`, and it keeps its own retry time.
+- A chunk that an earlier permanent failure stopped is no longer marked
+  retryable. It reports `NeedsIntervention` instead.
+- The storage shape of `NotificationOutcome` gains a `recovery` field. Schema
+  version 1 stays. An outcome written by 2.0.0 still reads: the reader derives
+  the careful disposition, which never turns open work into closed work.
+
+### Compatibility
+
+Three of the changes above go past a patch release, measured against the
+contract in [CONTRIBUTING.md](CONTRIBUTING.md):
+
+1. `PushMessage::$data` changes its declared type. Code that reads a key still
+   works. Code that calls `get_object_vars()`, casts with `(array)`, or checks
+   `instanceof stdClass` needs `toArray()` instead.
+2. `RecoveryDisposition` is a new enum, and `NotificationOutcome::$recovery` is
+   a new public property. An application that matches on every case of an enum
+   has a new value to read.
+3. The storage readers reject arrays that 2.0.0 accepted. Every array that
+   2.0.0 wrote still reads. An array that something else wrote, with a missing
+   or wrongly typed field, now raises `InvalidStorageException`.
+
+Nothing here publishes a release. The version number stays for the maintainer to
+choose.
+
 ## 2.0.0 - 2026-09-21
 
 A new result model. `send()` and `receipts()` no longer raise for an operational

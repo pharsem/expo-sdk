@@ -78,5 +78,12 @@ printf("%d chunk group(s) streamed, peak memory %.1f MB\n", $count, memory_get_p
 exampleHeading('what your queue must not do');
 
 printf("Do not let the queue replay a chunk that already produced tickets.\n");
-printf("Store the SendResult, and schedule only notAttempted() and unknown().\n");
-printf("An unknown notification can already be on its way: a resend can duplicate it.\n");
+printf("Store the SendResult, and schedule what recoverable() gives you.\n");
+printf("\n");
+printf("Do not schedule notAttempted() and unknown() alone. A notification that\n");
+printf("Expo refused with a 429 is neither of those, and it still has to go out.\n");
+printf("\n");
+printf("  \$work = \$result->recoverable();\n");
+printf("  \$work->dueAt(\$nowUtcMillis)      // the failure can pass, and it is time\n");
+printf("  \$work->needsIntervention()      // fix the cause first\n");
+printf("  \$outcome->duplicateRisk         // a resend can show it twice\n");
