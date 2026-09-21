@@ -197,6 +197,7 @@ final readonly class ReceiptOperation
         $entries = [];
 
         foreach ($this->plan->ids as $id) {
+            $all = $this->plan->allReferencesById[$id] ?? [];
             $reference = $this->plan->referencesById[$id] ?? null;
             $receipt = $receipts[$id] ?? null;
             $token = $reference?->token;
@@ -213,6 +214,9 @@ final readonly class ReceiptOperation
                 notificationIndex: $reference?->notificationIndex,
                 reference: $reference?->reference,
                 failureIndex: $failureIndexes[$id] ?? null,
+                // The first reference sits on the entry above. A repeated ID
+                // brought more, and each one names its own notification.
+                otherReferences: array_slice($all, 1),
             );
         }
 

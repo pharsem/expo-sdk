@@ -342,6 +342,7 @@ final readonly class ReceiptResult implements JsonSerializable
             $token = $current->token ?? $entry->token;
             $notificationIndex = $current->notificationIndex ?? $entry->notificationIndex;
             $reference = $current->reference ?? $entry->reference;
+            $others = self::joinReferences($current, $entry);
 
             if ($current->isReturned() && $entry->isReturned()) {
                 if (!self::sameReceipt($current->receipt, $entry->receipt) && !in_array($entry->id, $conflicts, true)) {
@@ -356,6 +357,7 @@ final readonly class ReceiptResult implements JsonSerializable
                     $notificationIndex,
                     $reference,
                     $current->failureIndex,
+                    $others,
                 );
 
                 continue;
@@ -371,6 +373,7 @@ final readonly class ReceiptResult implements JsonSerializable
                 $notificationIndex,
                 $reference,
                 $wins ? $shifted : $current->failureIndex,
+                $others,
             );
         }
 
@@ -485,6 +488,46 @@ final readonly class ReceiptResult implements JsonSerializable
         }
 
         return $ids;
+    }
+
+    /**
+     * Every reference of both entries but the first one, without a repeat.
+     *
+     * @return list<ReceiptReference>
+     */
+    private static function joinReferences(ReceiptEntry $current, ReceiptEntry $other): array
+    {
+        $seen = [];
+        $joined = [];
+        $first = true;
+
+        foreach ([...$current->references(), ...$other->references()] as $reference) {
+            $token = $reference->token;
+
+            $key = sprintf(
+                '%s|%s|%s',
+                $token === null ? '' : $token->value,
+                $reference->notificationIndex ?? '',
+                $reference->reference ?? ''
+            );
+
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+
+            // The first one stays on the entry itself.
+            if ($first) {
+                $first = false;
+
+                continue;
+            }
+
+            $joined[] = $reference;
+        }
+
+        return $joined;
     }
 
     /**

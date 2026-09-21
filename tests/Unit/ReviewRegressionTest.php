@@ -14,6 +14,7 @@ use Expo\Push\PushReceipt;
 use Expo\Push\PushToken;
 use Expo\Push\RateLimit\SlidingWindowRateLimiter;
 use Expo\Push\Result\ReceiptEntry;
+use Expo\Push\Result\ReceiptReference;
 use Expo\Push\Result\ReceiptResult;
 use Expo\Push\Result\ReceiptState;
 use Expo\Push\Result\SendResult;
@@ -289,6 +290,156 @@ final class ReviewRegressionTest extends TestCase
         $at = gmdate('D, d M Y H:i:s \G\M\T', 1_700_000_000 + 120);
 
         self::assertSame(120_000, RetryAfter::parse($at, 1_700_000_000_000));
+    }
+
+    /**
+     * A repeated receipt ID keeps the correlation of every notification that
+     * asked for it, not only of the first one.
+     */
+    public function testARepeatedIdKeepsEveryReference(): void
+    {
+        $http = (new FakeHttpClient())->queue(['data' => ['r1' => ['status' => 'ok']]]);
+
+        $result = $this->expo($http)->receipts([
+            new ReceiptReference('r1', new PushToken(self::TOKEN_A), 4, 'order-4'),
+            new ReceiptReference('r1', new PushToken(self::TOKEN_A), 9, 'order-9'),
+        ]);
+
+        $entry = $result->entry('r1');
+
+        self::assertInstanceOf(ReceiptEntry::class, $entry);
+        self::assertSame(['ids' => ['r1']], $http->payload());
+        self::assertSame(1, $result->count());
+
+        // The first reference sits on the entry, and the second one stays beside it.
+        self::assertSame(4, $entry->notificationIndex);
+        self::assertSame('order-4', $entry->reference);
+        self::assertCount(1, $entry->otherReferences);
+        self::assertSame(9, $entry->otherReferences[0]->notificationIndex);
+        self::assertSame('order-9', $entry->otherReferences[0]->reference);
+
+        self::assertCount(2, $entry->references());
+        self::assertSame([4, 9], $entry->notificationIndexes());
+    }
+
+    public function testASingleReferenceKeepsNoExtraList(): void
+    {
+        $http = (new FakeHttpClient())->queue(['data' => ['r1' => ['status' => 'ok']]]);
+
+        $result = $this->expo($http)->receipts([new ReceiptReference('r1', null, 2, 'order-2')]);
+        $entry = $result->entry('r1');
+
+        self::assertInstanceOf(ReceiptEntry::class, $entry);
+        self::assertSame([], $entry->otherReferences);
+        self::assertCount(1, $entry->references());
+        self::assertSame([2], $entry->notificationIndexes());
+    }
+
+    public function testEveryReferenceOfARepeatedIdSurvivesStorage(): void
+    {
+        $http = (new FakeHttpClient())->queue(['data' => ['r1' => ['status' => 'ok']]]);
+
+        $result = $this->expo($http)->receipts([
+            new ReceiptReference('r1', new PushToken(self::TOKEN_A), 4, 'order-4'),
+            new ReceiptReference('r1', new PushToken(self::TOKEN_A), 9, 'order-9'),
+        ]);
+
+        $json = json_encode($result->toStorageArray(), JSON_THROW_ON_ERROR);
+        $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertIsArray($decoded);
+
+        /** @var array<string, mixed> $decoded */
+        $entry = ReceiptResult::fromStorageArray($decoded)->entry('r1');
+
+        self::assertInstanceOf(ReceiptEntry::class, $entry);
+        self::assertSame([4, 9], $entry->notificationIndexes());
+        self::assertSame('order-9', $entry->otherReferences[0]->reference);
+    }
+
+    public function testAMergeKeepsTheReferencesOfBothLookups(): void
+    {
+        $first = new ReceiptResult([
+            new ReceiptEntry('r1', ReceiptState::Missing, null, null, 1, 'first'),
+        ]);
+        $second = new ReceiptResult([
+            new ReceiptEntry('r1', ReceiptState::Returned, new PushReceipt('r1', 'ok'), null, 2, 'second'),
+        ]);
+
+        $entry = $first->merge($second)->entry('r1');
+
+        self::assertInstanceOf(ReceiptEntry::class, $entry);
+        self::assertSame(ReceiptState::Returned, $entry->state);
+        self::assertSame([1, 2], $entry->notificationIndexes());
+    }
+
+    public function testAMergeNeverRepeatsTheSameReference(): void
+    {
+        $entry = new ReceiptEntry('r1', ReceiptState::Missing, null, null, 1, 'first');
+        $merged = (new ReceiptResult([$entry]))->merge(new ReceiptResult([$entry]))->entry('r1');
+
+        self::assertInstanceOf(ReceiptEntry::class, $merged);
+        self::assertSame([], $merged->otherReferences);
+        self::assertSame([1], $merged->notificationIndexes());
+    }
+
+    /**
+     * A returned entry without a receipt would report a complete lookup and give
+     * nothing back.
+     */
+    public function testAStoredReturnedEntryWithoutAReceiptIsRejected(): void
+    {
+        $stored = StorageEnvelope::wrap(ReceiptEntry::STORAGE_TYPE, [
+            'id' => 'r1',
+            'state' => 'returned',
+        ]);
+
+        $this->expectException(InvalidStorageException::class);
+        $this->expectExceptionMessage('no receipt');
+
+        ReceiptEntry::fromStorageArray($stored);
+    }
+
+    public function testAStoredReturnedEntryWithABrokenReceiptIsRejected(): void
+    {
+        $stored = StorageEnvelope::wrap(ReceiptEntry::STORAGE_TYPE, [
+            'id' => 'r1',
+            'state' => 'returned',
+            'receipt' => 'not an array',
+        ]);
+
+        $this->expectException(InvalidStorageException::class);
+        $this->expectExceptionMessage('no receipt');
+
+        ReceiptEntry::fromStorageArray($stored);
+    }
+
+    public function testAStoredMissingEntryWithAReceiptIsRejected(): void
+    {
+        $stored = StorageEnvelope::wrap(ReceiptEntry::STORAGE_TYPE, [
+            'id' => 'r1',
+            'state' => 'missing',
+            'receipt' => (new PushReceipt('r1', 'ok'))->toStorageArray(),
+        ]);
+
+        $this->expectException(InvalidStorageException::class);
+        $this->expectExceptionMessage('Only a returned entry');
+
+        ReceiptEntry::fromStorageArray($stored);
+    }
+
+    public function testAValidStoredEntryStillReads(): void
+    {
+        $stored = StorageEnvelope::wrap(ReceiptEntry::STORAGE_TYPE, [
+            'id' => 'r1',
+            'state' => 'returned',
+            'receipt' => (new PushReceipt('r1', 'ok'))->toStorageArray(),
+        ]);
+
+        $entry = ReceiptEntry::fromStorageArray($stored);
+
+        self::assertTrue($entry->isReturned());
+        self::assertSame('r1', $entry->receipt?->id);
     }
 
     public function testTheOfflineExampleTransportReadsAGzipBody(): void

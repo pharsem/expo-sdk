@@ -105,6 +105,11 @@ failure, so a late failure can never take the earlier answers with it.
 - `Retry-After` accepted a date that does not exist, such as 32 January, and
   deferred the work.
 - `Content-Encoding: deflate` stayed compressed for a zlib wrapped body.
+- A repeated receipt ID kept only the first reference. The entry now carries
+  every reference that asked for the ID, and a merge joins both lists.
+- A stored receipt entry with the state `returned` and no receipt read back as a
+  complete lookup that gives nothing. Both contradictions now raise
+  `InvalidStorageException`.
 
 ## 1.0.0 - 2026-09-21
 

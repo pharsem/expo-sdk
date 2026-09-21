@@ -242,6 +242,11 @@ $receipts = $expo->receipts($references);
 Only an accepted ticket with an ID produces a reference. A raw ID string carries
 no device unless you supply one.
 
+The SDK asks Expo for each ID one time. When two references point at the same
+ID, the entry keeps both: the first one on the entry, the rest in
+`ReceiptEntry::otherReferences`. `ReceiptEntry::references()` gives you all of
+them.
+
 ## Recover what is open
 
 ```php
