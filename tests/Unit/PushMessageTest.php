@@ -6,201 +6,431 @@ namespace Expo\Push\Tests\Unit;
 
 use DateTimeImmutable;
 use Expo\Push\Exception\InvalidMessageException;
+use Expo\Push\Exception\InvalidTokenException;
+use Expo\Push\Exception\MessageTooLargeException;
 use Expo\Push\InterruptionLevel;
 use Expo\Push\Priority;
 use Expo\Push\PushMessage;
 use Expo\Push\PushToken;
 use Expo\Push\Sound;
-use PHPUnit\Framework\TestCase;
+use Expo\Push\Tests\Support\TestCase;
+use stdClass;
 
 final class PushMessageTest extends TestCase
 {
-    private const TOKEN_A = 'ExponentPushToken[aaaaaaaaaaaaaaaaaaaaaa]';
-
-    private const TOKEN_B = 'ExponentPushToken[bbbbbbbbbbbbbbbbbbbbbb]';
-
-    public function testItBuildsTheMinimalPayload(): void
+    public function testTheFluentAndTheNamedFormGiveTheSameMessage(): void
     {
-        $message = PushMessage::to(self::TOKEN_A)->title('Hello')->body('World');
+        $fluent = PushMessage::to(self::TOKEN_A)
+            ->title('Title')
+            ->body('Body')
+            ->data(['orderId' => 42])
+            ->badge(1)
+            ->channelId('orders')
+            ->highPriority();
 
-        self::assertSame(
-            ['to' => self::TOKEN_A, 'title' => 'Hello', 'body' => 'World'],
-            $message->jsonSerialize()
+        $named = new PushMessage(
+            to: self::TOKEN_A,
+            title: 'Title',
+            body: 'Body',
+            data: ['orderId' => 42],
+            badge: 1,
+            channelId: 'orders',
+            priority: 'high',
         );
+
+        self::assertSame($fluent->toExpoArray(), $named->toExpoArray());
+        self::assertSame(Priority::High, $named->priority);
     }
 
-    public function testItKeepsSeveralRecipientsAsAList(): void
-    {
-        $message = PushMessage::to([self::TOKEN_A, self::TOKEN_B])->title('Hello');
-
-        self::assertSame([self::TOKEN_A, self::TOKEN_B], $message->jsonSerialize()['to']);
-        self::assertSame(2, $message->recipientCount());
-    }
-
-    public function testItRemovesDuplicateRecipients(): void
-    {
-        $message = PushMessage::to([self::TOKEN_A, self::TOKEN_A, self::TOKEN_B]);
-
-        self::assertSame(2, $message->recipientCount());
-    }
-
-    public function testItNeedsAtLeastOneRecipient(): void
-    {
-        $this->expectException(InvalidMessageException::class);
-
-        $message = PushMessage::to([]);
-
-        self::fail(sprintf('The call must fail. It returned %d recipients.', $message->recipientCount()));
-    }
-
-    public function testItNeverChangesTheOriginalMessage(): void
-    {
-        $first = PushMessage::to(self::TOKEN_A)->title('First');
-        $second = $first->title('Second');
-
-        self::assertSame('First', $first->title);
-        self::assertSame('Second', $second->title);
-        self::assertNotSame($first, $second);
-    }
-
-    public function testItBuildsEveryField(): void
+    public function testEveryDocumentedFieldReachesTheWire(): void
     {
         $message = new PushMessage(
             to: self::TOKEN_A,
             title: 'Title',
             body: 'Body',
-            data: ['orderId' => 42],
+            data: ['a' => 1],
             subtitle: 'Subtitle',
-            sound: Sound::critical('bells.wav', 0.5),
-            ttl: 600,
-            expiration: 1893456000,
-            priority: 'high',
-            interruptionLevel: 'time-sensitive',
+            sound: 'bells.wav',
+            ttl: 60,
+            expiration: 1_700_000_000,
+            priority: Priority::High,
+            interruptionLevel: InterruptionLevel::TimeSensitive,
             badge: 3,
             channelId: 'orders',
-            icon: 'ic_notification',
-            image: 'https://example.com/map.png',
-            categoryId: 'order_actions',
+            icon: 'ic_push',
+            image: 'https://example.test/a.png',
+            categoryId: 'actions',
             mutableContent: true,
             contentAvailable: true,
             collapseId: 'order-42',
             tag: 'order-42',
             threadId: 'orders',
             targetContentId: 'window-1',
-            relevanceScore: 0.9,
-            filterCriteria: 'orders',
+            relevanceScore: 0.5,
+            filterCriteria: 'focus',
+            reference: 'correlation-1',
         );
+
+        $payload = $message->toExpoArray();
 
         self::assertSame([
             'to' => self::TOKEN_A,
             'title' => 'Title',
             'subtitle' => 'Subtitle',
             'body' => 'Body',
-            'data' => ['orderId' => 42],
-            'sound' => ['critical' => true, 'name' => 'bells.wav', 'volume' => 0.5],
-            'ttl' => 600,
-            'expiration' => 1893456000,
+            'data' => ['a' => 1],
+            'sound' => 'bells.wav',
+            'ttl' => 60,
+            'expiration' => 1_700_000_000,
             'priority' => 'high',
             'interruptionLevel' => 'time-sensitive',
             'badge' => 3,
             'channelId' => 'orders',
-            'icon' => 'ic_notification',
-            'richContent' => ['image' => 'https://example.com/map.png'],
-            'categoryId' => 'order_actions',
+            'icon' => 'ic_push',
+            'richContent' => ['image' => 'https://example.test/a.png'],
+            'categoryId' => 'actions',
             'mutableContent' => true,
             'contentAvailable' => true,
             'collapseId' => 'order-42',
             'tag' => 'order-42',
             'threadId' => 'orders',
             'targetContentId' => 'window-1',
-            'relevanceScore' => 0.9,
-            'filterCriteria' => 'orders',
-        ], $message->jsonSerialize());
+            'relevanceScore' => 0.5,
+            'filterCriteria' => 'focus',
+        ], $payload);
+
+        self::assertArrayNotHasKey('reference', $payload);
     }
 
-    public function testItKeepsTheNullSoundForASilentNotification(): void
-    {
-        $payload = PushMessage::to(self::TOKEN_A)->silent()->jsonSerialize();
-
-        self::assertArrayHasKey('sound', $payload);
-        self::assertNull($payload['sound']);
-    }
-
-    public function testItAcceptsEnumsAndStrings(): void
-    {
-        $fromString = PushMessage::to(self::TOKEN_A)->priority('high')->interruptionLevel('passive');
-        $fromEnum = PushMessage::to(self::TOKEN_A)
-            ->priority(Priority::High)
-            ->interruptionLevel(InterruptionLevel::Passive);
-
-        self::assertSame(Priority::High, $fromString->priority);
-        self::assertSame(InterruptionLevel::Passive, $fromString->interruptionLevel);
-        self::assertEquals($fromEnum->jsonSerialize(), $fromString->jsonSerialize());
-    }
-
-    public function testItRejectsAnUnknownPriority(): void
-    {
-        $this->expectException(InvalidMessageException::class);
-        $this->expectExceptionMessage('"urgent" is not a valid value.');
-
-        $message = PushMessage::to(self::TOKEN_A)->priority('urgent');
-
-        self::fail(sprintf('The call must fail. It returned the priority %s.', $message->priority?->value));
-    }
-
-    public function testItRejectsValuesOutOfRange(): void
-    {
-        $this->expectException(InvalidMessageException::class);
-
-        $message = PushMessage::to(self::TOKEN_A)->relevanceScore(1.5);
-
-        self::fail(sprintf('The call must fail. It returned the score %s.', $message->relevanceScore));
-    }
-
-    public function testItAcceptsADateTimeForTheExpiration(): void
-    {
-        $date = new DateTimeImmutable('2030-01-01 00:00:00 UTC');
-        $message = PushMessage::to(self::TOKEN_A)->expiration($date);
-
-        self::assertSame($date->getTimestamp(), $message->expiration);
-    }
-
-    public function testItAddsOneDataKeyAtATime(): void
+    public function testFalseAndZeroStayOnTheWire(): void
     {
         $message = PushMessage::to(self::TOKEN_A)
-            ->data(['a' => 1])
-            ->withDatum('b', 2);
+            ->badge(0)
+            ->ttl(0)
+            ->mutableContent(false)
+            ->contentAvailable(false)
+            ->relevanceScore(0.0);
+
+        $payload = $message->toExpoArray();
+
+        self::assertSame(0, $payload['badge']);
+        self::assertSame(0, $payload['ttl']);
+        self::assertFalse($payload['mutableContent']);
+        self::assertFalse($payload['contentAvailable']);
+        self::assertSame(0.0, $payload['relevanceScore']);
+    }
+
+    public function testASilentSoundIsNotAMissingSound(): void
+    {
+        $silent = PushMessage::to(self::TOKEN_A)->silent()->toExpoArray();
+        $missing = PushMessage::to(self::TOKEN_A)->toExpoArray();
+
+        self::assertArrayHasKey('sound', $silent);
+        self::assertNull($silent['sound']);
+        self::assertArrayNotHasKey('sound', $missing);
+    }
+
+    public function testACriticalSoundKeepsItsVolume(): void
+    {
+        $payload = PushMessage::to(self::TOKEN_A)->sound(Sound::critical('alarm.wav', 0.8))->toExpoArray();
+
+        self::assertSame(['critical' => true, 'name' => 'alarm.wav', 'volume' => 0.8], $payload['sound']);
+    }
+
+    public function testASoundVolumeOutOfRangeRaises(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+
+        Sound::critical('a.wav', 1.5);
+    }
+
+    public function testANonFiniteSoundVolumeRaises(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+
+        Sound::critical('a.wav', NAN);
+    }
+
+    public function testClearingAFieldRemovesItFromTheWire(): void
+    {
+        $message = PushMessage::to(self::TOKEN_A)->title('Title')->badge(2);
+        $cleared = $message->title(null)->badge(null);
+
+        self::assertArrayNotHasKey('title', $cleared->toExpoArray());
+        self::assertArrayNotHasKey('badge', $cleared->toExpoArray());
+        // The first message never changed.
+        self::assertSame('Title', $message->title);
+    }
+
+    public function testEmptyDataGoesOutAsAJsonObject(): void
+    {
+        $message = PushMessage::to(self::TOKEN_A)->data([]);
+
+        self::assertStringContainsString('"data":{}', json_encode($message->toExpoArray(), JSON_THROW_ON_ERROR));
+    }
+
+    public function testAStdClassIsAcceptedAsData(): void
+    {
+        $data = new stdClass();
+        $data->orderId = 42;
+        $data->nested = new stdClass();
+
+        $message = PushMessage::to(self::TOKEN_A)->data($data);
+
+        self::assertStringContainsString(
+            '"data":{"orderId":42,"nested":{}}',
+            json_encode($message->toExpoArray(), JSON_THROW_ON_ERROR)
+        );
+    }
+
+    public function testATopLevelListIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+        $this->expectExceptionMessage('must be a JSON object');
+
+        /** @phpstan-ignore argument.type */
+        PushMessage::to(self::TOKEN_A)->data([1, 2, 3]);
+    }
+
+    public function testANestedListStaysAList(): void
+    {
+        $message = PushMessage::to(self::TOKEN_A)->data(['items' => [1, 2, 3], 'map' => ['a' => 1]]);
+
+        self::assertStringContainsString(
+            '"data":{"items":[1,2,3],"map":{"a":1}}',
+            json_encode($message->toExpoArray(), JSON_THROW_ON_ERROR)
+        );
+    }
+
+    public function testANumericStringStaysAString(): void
+    {
+        $message = PushMessage::to(self::TOKEN_A)->data(['orderId' => '00042']);
+
+        self::assertStringContainsString('"orderId":"00042"', json_encode($message->toExpoArray(), JSON_THROW_ON_ERROR));
+    }
+
+    public function testAMutableObjectCannotChangeThroughTheMessage(): void
+    {
+        $data = new stdClass();
+        $data->value = 'first';
+
+        $message = PushMessage::to(self::TOKEN_A)->data($data);
+        $data->value = 'second';
+
+        self::assertStringContainsString('"value":"first"', json_encode($message->toExpoArray(), JSON_THROW_ON_ERROR));
+    }
+
+    public function testANestedObjectReferenceCannotChangeThroughTheMessage(): void
+    {
+        $nested = new stdClass();
+        $nested->value = 'first';
+
+        $message = PushMessage::to(self::TOKEN_A)->data(['nested' => $nested]);
+        $nested->value = 'second';
+
+        self::assertStringContainsString('"value":"first"', json_encode($message->toExpoArray(), JSON_THROW_ON_ERROR));
+    }
+
+    public function testAnObjectThatIsNotStdClassIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+        $this->expectExceptionMessage('Give an array, a stdClass or a scalar');
+
+        PushMessage::to(self::TOKEN_A)->data(['when' => new DateTimeImmutable()]);
+    }
+
+    public function testNanAndInfinityAreRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+
+        PushMessage::to(self::TOKEN_A)->data(['value' => NAN]);
+    }
+
+    public function testInfinityIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+
+        PushMessage::to(self::TOKEN_A)->data(['value' => INF]);
+    }
+
+    public function testInvalidUtf8InDataIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+        $this->expectExceptionMessage('not valid UTF-8');
+
+        PushMessage::to(self::TOKEN_A)->data(['value' => "\xB1\x31"]);
+    }
+
+    public function testInvalidUtf8InTheTitleIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+        $this->expectExceptionMessage('title is not valid UTF-8');
+
+        PushMessage::to(self::TOKEN_A)->title("bad \xB1\x31");
+    }
+
+    public function testAResourceInDataIsRejected(): void
+    {
+        $handle = fopen('php://memory', 'rb');
+        self::assertIsResource($handle);
+
+        try {
+            $this->expectException(InvalidMessageException::class);
+            PushMessage::to(self::TOKEN_A)->data(['handle' => $handle]);
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    public function testTheSizeCountsUnicodeBytes(): void
+    {
+        $empty = PushMessage::to(self::TOKEN_A);
+        $ascii = $empty->body(str_repeat('a', 10));
+        $emoji = $empty->body(str_repeat('🎉', 10));
+
+        // An empty message is {}, which is two bytes.
+        self::assertSame(2, $empty->sizeInBytes());
+        // {"body":"aaaaaaaaaa"} is 21 bytes.
+        self::assertSame(21, $ascii->sizeInBytes());
+        // Each emoji takes four UTF-8 bytes, so the body grows by 30 bytes.
+        self::assertSame(51, $emoji->sizeInBytes());
+    }
+
+    public function testTheSizeLeavesOutTheRecipients(): void
+    {
+        $one = PushMessage::to(self::TOKEN_A)->title('Hi');
+        $many = PushMessage::to([self::TOKEN_A, self::TOKEN_B, self::TOKEN_C])->title('Hi');
+
+        self::assertSame($one->sizeInBytes(), $many->sizeInBytes());
+    }
+
+    public function testTheSizeCheckRaisesAboveTheLimit(): void
+    {
+        $message = PushMessage::to(self::TOKEN_A)->data(['blob' => str_repeat('x', 5000)]);
+
+        try {
+            $message->assertWithinSizeLimit();
+            self::fail('The check must raise MessageTooLargeException.');
+        } catch (MessageTooLargeException $exception) {
+            self::assertSame(PushMessage::MAX_SIZE, $exception->limit);
+            self::assertGreaterThan(5000, $exception->size);
+        }
+    }
+
+    public function testAnEmptyRecipientListIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+        $this->expectExceptionMessage('at least one recipient');
+
+        PushMessage::to([]);
+    }
+
+    public function testABadTokenIsRejected(): void
+    {
+        $this->expectException(InvalidTokenException::class);
+
+        PushMessage::to('not-a-token');
+    }
+
+    public function testABadEnumValueNamesTheValidOnes(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+        $this->expectExceptionMessage('default, normal, high');
+
+        PushMessage::to(self::TOKEN_A)->priority('urgent');
+    }
+
+    public function testANegativeBadgeIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+
+        PushMessage::to(self::TOKEN_A)->badge(-1);
+    }
+
+    public function testANegativeTtlIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+
+        PushMessage::to(self::TOKEN_A)->ttl(-1);
+    }
+
+    public function testARelevanceScoreOutOfRangeIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+
+        PushMessage::to(self::TOKEN_A)->relevanceScore(1.5);
+    }
+
+    public function testANonFiniteRelevanceScoreIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+        $this->expectExceptionMessage('finite');
+
+        PushMessage::to(self::TOKEN_A)->relevanceScore(NAN);
+    }
+
+    public function testAnExpirationAcceptsADateTime(): void
+    {
+        $date = new DateTimeImmutable('@1700000000');
+
+        self::assertSame(1_700_000_000, PushMessage::to(self::TOKEN_A)->expiration($date)->expiration);
+    }
+
+    public function testAnyTimestampIsAllowed(): void
+    {
+        self::assertSame(0, PushMessage::to(self::TOKEN_A)->expiration(0)->expiration);
+        self::assertSame(-1, PushMessage::to(self::TOKEN_A)->expiration(-1)->expiration);
+    }
+
+    public function testWithDatumKeepsTheOtherKeys(): void
+    {
+        $message = PushMessage::to(self::TOKEN_A)->data(['a' => 1])->withDatum('b', 2);
 
         self::assertSame(['a' => 1, 'b' => 2], $message->data);
     }
 
-    public function testItAddsAndReplacesRecipients(): void
+    public function testWithDatumWorksOnAStdClass(): void
     {
-        $message = PushMessage::to(self::TOKEN_A)->addRecipients(self::TOKEN_B);
-        self::assertSame(2, $message->recipientCount());
+        $data = new stdClass();
+        $data->a = 1;
 
-        $replaced = $message->recipients(self::TOKEN_B);
-        self::assertSame([self::TOKEN_B], array_map(
-            static fn (PushToken $token): string => $token->value,
-            $replaced->to
-        ));
+        $message = PushMessage::to(self::TOKEN_A)->data($data)->withDatum('b', 2);
+
+        self::assertStringContainsString('"b":2', json_encode($message->toExpoArray(), JSON_THROW_ON_ERROR));
     }
 
-    public function testItSplitsIntoOneMessagePerRecipient(): void
+    public function testPerRecipientSplitsTheMessage(): void
     {
         $messages = PushMessage::to([self::TOKEN_A, self::TOKEN_B])->title('Hi')->perRecipient();
 
         self::assertCount(2, $messages);
-        self::assertSame(self::TOKEN_A, $messages[0]->jsonSerialize()['to']);
+        self::assertSame([self::TOKEN_A], self::values($messages[0]->to));
         self::assertSame('Hi', $messages[1]->title);
     }
 
-    public function testItMeasuresTheSizeWithoutTheRecipients(): void
+    public function testTheMessageNeverChanges(): void
     {
-        $small = PushMessage::to(self::TOKEN_A)->title('Hi');
-        $large = PushMessage::to(self::TOKEN_A)->data(['blob' => str_repeat('x', 5000)]);
+        $first = PushMessage::to(self::TOKEN_A)->title('One');
+        $second = $first->title('Two');
 
-        self::assertLessThan(PushMessage::MAX_SIZE, $small->sizeInBytes());
-        self::assertGreaterThan(PushMessage::MAX_SIZE, $large->sizeInBytes());
+        self::assertSame('One', $first->title);
+        self::assertSame('Two', $second->title);
+        self::assertNotSame($first, $second);
+    }
+
+    public function testATokenObjectIsAccepted(): void
+    {
+        $message = PushMessage::to(new PushToken(self::TOKEN_A));
+
+        self::assertSame([self::TOKEN_A], self::values($message->to));
+    }
+
+    public function testAnItemThatIsNotATokenIsRejected(): void
+    {
+        $this->expectException(InvalidMessageException::class);
+        $this->expectExceptionMessage('PushToken or a string');
+
+        /** @phpstan-ignore argument.type */
+        PushMessage::to([42]);
     }
 }

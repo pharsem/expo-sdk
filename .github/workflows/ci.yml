@@ -39,6 +39,55 @@ jobs:
       - name: Run the tests
         run: vendor/bin/phpunit
 
+  core-only:
+    name: Core dependencies only
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v7
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, json, mbstring
+          coverage: none
+
+      - name: Install the production dependencies only
+        run: composer install --no-dev --no-interaction --no-progress
+
+      - name: Load every class without the optional PSR packages
+        run: php tests/Support/core-only.php
+
+  coverage:
+    name: Coverage report
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v7
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, json, mbstring, zlib
+          coverage: pcov
+
+      - name: Install the dependencies
+        uses: ramsey/composer-install@v4
+
+      - name: Run the tests with coverage
+        run: vendor/bin/phpunit --coverage-text --coverage-clover=build/clover.xml
+
+      - name: Upload the report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: build/clover.xml
+          if-no-files-found: error
+
   static-analysis:
     name: Static analysis
     runs-on: ubuntu-latest
@@ -58,7 +107,7 @@ jobs:
         uses: ramsey/composer-install@v4
 
       - name: Run PHPStan
-        run: vendor/bin/phpstan analyse --no-progress
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
   composer:
     name: Validate composer.json
@@ -76,3 +125,30 @@ jobs:
 
       - name: Validate
         run: composer validate --strict
+
+  examples:
+    name: Examples and benchmark
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v7
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, json, mbstring, zlib
+          coverage: none
+
+      - name: Install the dependencies
+        uses: ramsey/composer-install@v4
+
+      - name: Check that every example parses
+        run: for file in examples/*.php; do php -l "$file"; done
+
+      - name: Run the examples against the fake transport
+        run: php examples/run-all.php
+
+      - name: Run the benchmark
+        run: php benchmarks/run.php --quick

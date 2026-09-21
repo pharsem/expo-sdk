@@ -6,30 +6,34 @@ namespace Expo\Push;
 
 use ArrayIterator;
 use Countable;
+use Expo\Push\Exception\InvalidStorageException;
+use Expo\Push\Storage\StorageEnvelope;
 use IteratorAggregate;
 use JsonSerializable;
 use Traversable;
 
 /**
- * Every receipt that Expo returned for a list of receipt IDs.
+ * The receipts that Expo returned.
  *
- * Expo leaves out a receipt that is not ready. Read the missing IDs again later.
+ * The collection holds returned receipts and nothing else. It does not know what
+ * you asked for, so it cannot tell you what is missing, and filtering it can
+ * never invent a missing ID. `ReceiptResult` owns the coverage of a lookup:
+ * read `ReceiptResult::missingIds()`, `failedIds()` and `notAttemptedIds()`.
  *
  * @implements IteratorAggregate<int, PushReceipt>
  */
 final readonly class ReceiptCollection implements Countable, IteratorAggregate, JsonSerializable
 {
+    public const string STORAGE_TYPE = 'expo.receipts';
+
     /** @var list<PushReceipt> */
     private array $receipts;
 
     /**
      * @param iterable<PushReceipt> $receipts
-     * @param list<string>          $requestedIds the IDs that you asked for
      */
-    public function __construct(
-        iterable $receipts = [],
-        private array $requestedIds = [],
-    ) {
+    public function __construct(iterable $receipts = [])
+    {
         $this->receipts = is_array($receipts) ? array_values($receipts) : iterator_to_array($receipts, false);
     }
 
@@ -69,7 +73,17 @@ final readonly class ReceiptCollection implements Countable, IteratorAggregate, 
     }
 
     /**
-     * The receipts of the delivered notifications.
+     * The IDs that this collection holds.
+     *
+     * @return list<string>
+     */
+    public function ids(): array
+    {
+        return array_map(static fn (PushReceipt $receipt): string => $receipt->id, $this->receipts);
+    }
+
+    /**
+     * The receipts that Apple or Google took. This is not device delivery.
      */
     #[\NoDiscard]
     public function ok(): self
@@ -78,7 +92,7 @@ final readonly class ReceiptCollection implements Countable, IteratorAggregate, 
     }
 
     /**
-     * The receipts of the failed notifications.
+     * The receipts that report a failure.
      */
     #[\NoDiscard]
     public function errors(): self
@@ -107,19 +121,7 @@ final readonly class ReceiptCollection implements Countable, IteratorAggregate, 
     }
 
     /**
-     * The IDs that Expo did not answer yet. Ask for them again in some minutes.
-     *
-     * @return list<string>
-     */
-    public function pendingIds(): array
-    {
-        $answered = array_map(static fn (PushReceipt $receipt): string => $receipt->id, $this->receipts);
-
-        return array_values(array_diff($this->requestedIds, $answered));
-    }
-
-    /**
-     * The dead devices. Delete these tokens from your database.
+     * The devices that Expo marked `DeviceNotRegistered`. Delete these tokens.
      *
      * @return list<PushToken>
      */
@@ -142,7 +144,7 @@ final readonly class ReceiptCollection implements Countable, IteratorAggregate, 
     #[\NoDiscard]
     public function filter(callable $filter): self
     {
-        return new self(array_values(array_filter($this->receipts, $filter)), $this->requestedIds);
+        return new self(array_values(array_filter($this->receipts, $filter)));
     }
 
     /**
@@ -157,13 +159,29 @@ final readonly class ReceiptCollection implements Countable, IteratorAggregate, 
         return array_map($callback, $this->receipts);
     }
 
+    /**
+     * Builds one collection out of many, in one pass.
+     *
+     * @param iterable<self> $collections
+     */
+    #[\NoDiscard]
+    public static function concat(iterable $collections): self
+    {
+        $receipts = [];
+
+        foreach ($collections as $collection) {
+            foreach ($collection->all() as $receipt) {
+                $receipts[] = $receipt;
+            }
+        }
+
+        return new self($receipts);
+    }
+
     #[\NoDiscard]
     public function merge(self $other): self
     {
-        return new self(
-            [...$this->receipts, ...$other->all()],
-            [...$this->requestedIds, ...$other->requestedIds],
-        );
+        return new self([...$this->receipts, ...$other->all()]);
     }
 
     #[\Override]
@@ -173,11 +191,39 @@ final readonly class ReceiptCollection implements Countable, IteratorAggregate, 
     }
 
     /**
-     * @return list<PushReceipt>
+     * @return array<string, mixed>
+     */
+    public function toStorageArray(): array
+    {
+        return StorageEnvelope::wrap(self::STORAGE_TYPE, [
+            'receipts' => array_map(
+                static fn (PushReceipt $receipt): array => $receipt->toStorageArray(),
+                $this->receipts
+            ),
+        ]);
+    }
+
+    /**
+     * @param array<string, mixed> $stored
+     *
+     * @throws InvalidStorageException
+     */
+    public static function fromStorageArray(array $stored): self
+    {
+        $data = StorageEnvelope::unwrap(self::STORAGE_TYPE, $stored);
+
+        return new self(array_map(
+            static fn (array $entry): PushReceipt => PushReceipt::fromStorageArray($entry),
+            StorageEnvelope::listOfArrays(self::STORAGE_TYPE, $data, 'receipts')
+        ));
+    }
+
+    /**
+     * @return array<string, mixed>
      */
     #[\Override]
     public function jsonSerialize(): array
     {
-        return $this->receipts;
+        return $this->toStorageArray();
     }
 }

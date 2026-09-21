@@ -1,6 +1,6 @@
 {
     "name": "pharsem/expo-sdk",
-    "description": "A modern, dependency-free PHP SDK for the Expo push notification service.",
+    "description": "A modern, dependency-free PHP SDK for the Expo push notification service, with honest send results.",
     "keywords": ["expo", "push", "notifications", "expo-push", "react-native", "sdk"],
     "type": "library",
     "license": "MIT",
@@ -27,8 +27,9 @@
         "psr/http-factory": "^1.1"
     },
     "suggest": {
-        "ext-zlib": "Compresses large request bodies with gzip before sending.",
-        "psr/http-client": "Sends requests through any PSR-18 client, such as Guzzle, with Psr18HttpClient."
+        "ext-zlib": "Compresses a request body above 1024 bytes with gzip, and decompresses a gzip answer.",
+        "psr/http-client": "Sends the requests through any PSR-18 client, such as Guzzle, with Psr18HttpClient.",
+        "psr/http-factory": "Builds the PSR-7 requests and streams that Psr18HttpClient needs."
     },
     "autoload": {
         "psr-4": {
@@ -45,15 +46,23 @@
     },
     "scripts": {
         "test": "phpunit",
-        "analyse": "phpstan analyse",
+        "coverage": "phpunit --coverage-text --coverage-clover=build/clover.xml",
+        "analyse": "phpstan analyse --memory-limit=1G",
+        "bench": "php benchmarks/run.php",
         "check": [
             "@analyse",
             "@test"
         ]
     },
+    "scripts-descriptions": {
+        "test": "Runs the test suite. No test sends a real notification.",
+        "coverage": "Runs the test suite and writes a coverage report to build/.",
+        "analyse": "Runs PHPStan at level 8.",
+        "bench": "Runs the local benchmark of planning, chunking and sending."
+    },
     "extra": {
         "branch-alias": {
-            "dev-main": "1.x-dev"
+            "dev-main": "2.x-dev"
         }
     },
     "minimum-stability": "stable",
