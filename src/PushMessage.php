@@ -11,6 +11,7 @@ use Expo\Push\Exception\MessageTooLargeException;
 use Expo\Push\Exception\InvalidMessageException;
 use Expo\Push\Storage\StorageEnvelope;
 use Expo\Push\Support\Json;
+use Expo\Push\Support\JsonObject;
 use JsonSerializable;
 use stdClass;
 
@@ -39,11 +40,27 @@ final readonly class PushMessage implements JsonSerializable
 
     public const string STORAGE_TYPE = 'expo.message';
 
+    /**
+     * The deepest custom data that a message carries.
+     *
+     * The message object itself is one level of the payload that goes on the
+     * wire, so the data field keeps one level less than the JSON limit. A value
+     * that passes this check always encodes inside a message.
+     */
+    public const int MAX_DATA_DEPTH = Json::MAX_DEPTH - 1;
+
     /** @var list<PushToken> */
     public array $to;
 
-    /** @var array<string, mixed>|stdClass|null */
-    public array|stdClass|null $data;
+    /**
+     * The custom JSON that the app reads, or null.
+     *
+     * The value is a plain array, or a `JsonObject` when you gave an object.
+     * Neither one can change after the constructor ran, at any level.
+     *
+     * @var array<string, mixed>|JsonObject|null
+     */
+    public array|JsonObject|null $data;
 
     public ?Sound $sound;
 
@@ -57,7 +74,7 @@ final readonly class PushMessage implements JsonSerializable
      * @param PushToken|string|iterable<PushToken|string> $to                one or more Expo push tokens
      * @param string|null                                 $title             the title of the notification
      * @param string|null                                 $body              the text of the notification
-     * @param array<string, mixed>|stdClass|null          $data              custom JSON that the app reads
+     * @param array<string, mixed>|stdClass|JsonObject|null $data            custom JSON that the app reads
      * @param string|null                                 $subtitle          a second line below the title (iOS)
      * @param Sound|string|null                           $sound             the sound to play (iOS)
      * @param int|null                                    $ttl               seconds that Expo keeps the message for redelivery
@@ -85,7 +102,7 @@ final readonly class PushMessage implements JsonSerializable
         PushToken|string|iterable $to,
         public ?string $title = null,
         public ?string $body = null,
-        array|stdClass|null $data = null,
+        array|stdClass|JsonObject|null $data = null,
         public ?string $subtitle = null,
         Sound|string|null $sound = null,
         public ?int $ttl = null,
@@ -211,12 +228,13 @@ final readonly class PushMessage implements JsonSerializable
      * rejects it. An empty array goes on the wire as `{}`.
      *
      * The SDK copies the value. A later change to your own array or object cannot
-     * reach the message.
+     * reach the message, and neither can a change to what the message gives back:
+     * an object becomes an immutable `JsonObject` at every level.
      *
-     * @param array<string, mixed>|stdClass|null $data
+     * @param array<string, mixed>|stdClass|JsonObject|null $data
      */
     #[\NoDiscard('Use the new message that this method returns.')]
-    public function data(array|stdClass|null $data): self
+    public function data(array|stdClass|JsonObject|null $data): self
     {
         return $this->with('data', $data);
     }
@@ -229,11 +247,13 @@ final readonly class PushMessage implements JsonSerializable
     {
         $data = $this->data;
 
-        if ($data instanceof stdClass) {
-            $copy = clone $data;
-            $copy->{$key} = $value;
+        if ($data instanceof JsonObject) {
+            $copy = $data->toArray();
+            $copy[$key] = $value;
 
-            return $this->with('data', $copy);
+            // The value came in as an object, so it stays one. An array with
+            // one numeric key would otherwise go on the wire as a list.
+            return $this->with('data', (object) $copy);
         }
 
         $copy = $data ?? [];
@@ -617,11 +637,11 @@ final readonly class PushMessage implements JsonSerializable
     }
 
     /**
-     * @param array<string, mixed>|stdClass|null $data
+     * @param array<string, mixed>|stdClass|JsonObject|null $data
      *
-     * @return array<string, mixed>|stdClass|null
+     * @return array<string, mixed>|JsonObject|null
      */
-    private static function normalizeData(array|stdClass|null $data): array|stdClass|null
+    private static function normalizeData(array|stdClass|JsonObject|null $data): array|JsonObject|null
     {
         if ($data === null) {
             return null;
@@ -634,18 +654,25 @@ final readonly class PushMessage implements JsonSerializable
             );
         }
 
-        /** @var array<string, mixed>|stdClass $snapshot */
-        $snapshot = Json::snapshot($data);
+        /** @var array<string, mixed>|JsonObject $snapshot */
+        $snapshot = Json::snapshot($data, 'data', self::MAX_DATA_DEPTH);
 
         return $snapshot;
     }
 
     /**
+     * The custom data of a stored message.
+     *
+     * In storage the field is always a JSON object, never a JSON list. A JSON
+     * object whose keys are numbers decodes into a PHP list, so the reader
+     * gives that shape back as an object. Without it, a valid message that the
+     * SDK wrote would come back as a list and the constructor would refuse it.
+     *
      * @param array<string, mixed> $data
      *
-     * @return array<string, mixed>|null
+     * @return array<string, mixed>|stdClass|JsonObject|null
      */
-    private static function storedData(array $data): ?array
+    private static function storedData(array $data): array|stdClass|JsonObject|null
     {
         $value = $data['data'] ?? null;
 
@@ -653,12 +680,18 @@ final readonly class PushMessage implements JsonSerializable
             return null;
         }
 
-        if ($value instanceof stdClass) {
-            return Json::objectToArray($value);
+        if ($value instanceof stdClass || $value instanceof JsonObject) {
+            return $value;
         }
 
         if (!is_array($value)) {
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'data');
+        }
+
+        // An empty array and a numeric-keyed array are both a JSON object here.
+        // A list of positions never reaches the data field of a message.
+        if (array_is_list($value)) {
+            return (object) $value;
         }
 
         /** @var array<string, mixed> $value */

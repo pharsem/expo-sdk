@@ -209,13 +209,18 @@ final class RetryTimingTest extends TestCase
         )->send(PushMessage::to(self::tokens(2))->title('Hi'));
 
         self::assertSame(1, $http->requestCount());
+        // The wait stops at the deadline. The SDK never sleeps the whole 3000 ms
+        // backoff for an attempt that it may no longer start.
+        self::assertSame([2_000], $this->sleeper->waits);
         // The first chunk was on the wire, so its acceptance stays unknown. The
         // second chunk never started.
         self::assertSame(Acceptance::Unknown, $result->outcomes()[0]->acceptance);
         self::assertSame(Acceptance::NotAttempted, $result->outcomes()[1]->acceptance);
         self::assertSame(FailureCategory::Deadline, $result->requestFailures()[0]->category);
         self::assertSame(1, $result->requestFailures()[0]->attemptCount());
-        self::assertSame(FailureCategory::Skipped, $result->requestFailures()[1]->category);
+        // The deadline, not an earlier failure, is what stopped the second
+        // chunk: at the moment it ran out, nothing had failed yet.
+        self::assertSame(FailureCategory::Deadline, $result->requestFailures()[1]->category);
     }
 
     public function testATransportExceptionIsRetried(): void

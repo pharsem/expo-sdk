@@ -102,6 +102,7 @@ final readonly class ReceiptOperation
             OperationType::Receipts,
             $this->continueAfterFailure,
             $this->operationDeadlineMs,
+            $this->engine->settings()->maxInlineWaitMs,
         );
 
         $scheduler->run($runners);

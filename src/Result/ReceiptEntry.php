@@ -170,16 +170,135 @@ final readonly class ReceiptEntry implements JsonSerializable
             );
         }
 
-        return new self(
+        // A token of the wrong shape must raise a storage error, not escape as
+        // an InvalidTokenException from the constructor.
+        if ($token !== null && (!is_string($token) || !PushToken::isValid($token))) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'token');
+        }
+
+        $entry = new self(
             id: $id,
             state: $state,
             receipt: is_array($receipt) ? PushReceipt::fromStorageArray($receipt) : null,
             token: is_string($token) ? new PushToken($token) : null,
-            notificationIndex: is_int($data['notificationIndex'] ?? null) ? (int) $data['notificationIndex'] : null,
-            reference: is_string($data['reference'] ?? null) ? (string) $data['reference'] : null,
-            failureIndex: is_int($data['failureIndex'] ?? null) ? (int) $data['failureIndex'] : null,
+            notificationIndex: self::optionalIndex($data, 'notificationIndex'),
+            reference: self::optionalString($data, 'reference'),
+            failureIndex: self::optionalIndex($data, 'failureIndex'),
             otherReferences: $others,
         );
+
+        foreach ($others as $reference) {
+            self::assertReferenceBelongs($entry, $reference);
+        }
+
+        // The entry, its receipt and every reference name one notification, so
+        // every token that any of them holds is the same token. The entry does
+        // not have to hold one itself.
+        $entry->assertOneDevice();
+
+        if ($entry->receipt !== null && $entry->receipt->id !== $entry->id) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s holds a receipt with another ID. The association is broken.',
+                self::STORAGE_TYPE
+            ));
+        }
+
+        return $entry;
+    }
+
+    /**
+     * Refuses an entry whose parts name two devices.
+     *
+     * @throws InvalidStorageException
+     */
+    private function assertOneDevice(): void
+    {
+        $canonical = null;
+
+        foreach ([$this->token, $this->receipt?->token, ...array_map(
+            static fn (ReceiptReference $reference): ?PushToken => $reference->token,
+            $this->otherReferences
+        )] as $token) {
+            if ($token === null) {
+                continue;
+            }
+
+            if ($canonical === null) {
+                $canonical = $token->value;
+
+                continue;
+            }
+
+            if ($canonical !== $token->value) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s "%s" names two devices. One receipt ID belongs to one notification.',
+                    self::STORAGE_TYPE,
+                    $this->id
+                ));
+            }
+        }
+    }
+
+    /**
+     * Refuses a later reference that belongs to another ID or another device.
+     *
+     * Every reference of one entry asks about the same receipt ID. A stored
+     * list that mixes two IDs would give one notification the correlation of
+     * another one.
+     *
+     * @throws InvalidStorageException
+     */
+    private static function assertReferenceBelongs(self $entry, ReceiptReference $reference): void
+    {
+        if ($reference->id !== $entry->id) {
+            throw new InvalidStorageException(sprintf(
+                'The stored %s "%s" holds a later reference for "%s". Every reference names one ID.',
+                self::STORAGE_TYPE,
+                $entry->id,
+                $reference->id
+            ));
+        }
+
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidStorageException
+     */
+    private static function optionalIndex(array $data, string $field): ?int
+    {
+        $value = $data[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_int($value) || $value < 0) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidStorageException
+     */
+    private static function optionalString(array $data, string $field): ?string
+    {
+        $value = $data[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
     }
 
     /**

@@ -12,12 +12,30 @@ use JsonSerializable;
 /**
  * The notifications of one send that still need a decision.
  *
- * Two groups, and they are not the same thing:
+ * The work holds every unresolved notification, whatever its acceptance. A
+ * notification that Expo is known not to have accepted still belongs here when
+ * the failure behind it can pass later: a 429 with a `Retry-After` header, a
+ * deferred chunk, a chunk that an earlier failure stopped.
+ *
+ * Read the work through two questions, and keep them apart:
+ *
+ * Can a repeat duplicate the notification?
  *
  * - `notAttempted()`: the SDK never dispatched a request that held them. Sending
  *   them again cannot produce a duplicate.
  * - `ambiguous()`: a request that held them may already have reached Expo.
  *   Sending them again can show the notification twice on the device.
+ *
+ * May a repeat go out at all?
+ *
+ * - `retryable()`: the failure can pass on a later attempt. Wait until
+ *   `earliestRetryAtUtcMs`, then decide. `dueAt()` gives the ones whose moment
+ *   has come.
+ * - `needsIntervention()`: fix the cause first. A credential failure, a limiter
+ *   that broke, and an answer that the SDK cannot trust all land here.
+ *
+ * An accepted notification never enters the work, and a rejection that a repeat
+ * cannot fix never enters it either.
  *
  * The SDK never resends for you and never calls an ambiguous notification safe.
  * A new correlation value does not make a resend idempotent: Expo has no
@@ -39,14 +57,18 @@ final readonly class RecoverableWork implements JsonSerializable
     }
 
     /**
-     * Collects everything that a send left open: not attempted and unknown.
+     * Collects everything that a send left open.
+     *
+     * The selection reads the recovery disposition of each outcome, not the
+     * acceptance alone. A notification that Expo refused with a 429 is still
+     * open work, and an accepted one never is.
      */
     public static function fromSendResult(SendResult $result): self
     {
         $outcomes = [];
 
         foreach ($result->outcomes as $outcome) {
-            if ($outcome->acceptance === Acceptance::NotAttempted || $outcome->acceptance === Acceptance::Unknown) {
+            if ($outcome->isOpen()) {
                 $outcomes[] = $outcome;
             }
         }
@@ -88,6 +110,50 @@ final readonly class RecoverableWork implements JsonSerializable
             $this->outcomes,
             static fn (NotificationOutcome $outcome): bool => $outcome->acceptance === Acceptance::Unknown
                 || $outcome->duplicateRisk
+        ));
+    }
+
+    /**
+     * The notifications whose failure can pass on a later attempt.
+     *
+     * Eligible is not the same as due. Read `earliestRetryAtUtcMs` on each
+     * outcome, or use `dueAt()`.
+     *
+     * @return list<NotificationOutcome>
+     */
+    public function retryable(): array
+    {
+        return array_values(array_filter(
+            $this->outcomes,
+            static fn (NotificationOutcome $outcome): bool => $outcome->isRetryable()
+        ));
+    }
+
+    /**
+     * The notifications that need an application decision before a repeat.
+     *
+     * @return list<NotificationOutcome>
+     */
+    public function needsIntervention(): array
+    {
+        return array_values(array_filter(
+            $this->outcomes,
+            static fn (NotificationOutcome $outcome): bool => $outcome->needsIntervention()
+        ));
+    }
+
+    /**
+     * The retryable notifications whose earliest retry time has come.
+     *
+     * @param int $nowUtcMillis the current UTC wall time in milliseconds
+     *
+     * @return list<NotificationOutcome>
+     */
+    public function dueAt(int $nowUtcMillis): array
+    {
+        return array_values(array_filter(
+            $this->outcomes,
+            static fn (NotificationOutcome $outcome): bool => $outcome->isDueAt($nowUtcMillis)
         ));
     }
 
@@ -146,6 +212,8 @@ final readonly class RecoverableWork implements JsonSerializable
             'total' => $this->count(),
             'notAttempted' => count($this->notAttempted()),
             'ambiguous' => count($this->ambiguous()),
+            'retryable' => count($this->retryable()),
+            'needsIntervention' => count($this->needsIntervention()),
         ];
     }
 

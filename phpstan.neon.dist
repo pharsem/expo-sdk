@@ -6,3 +6,7 @@ parameters:
         - examples
         - benchmarks
     treatPhpDocTypesAsCertain: false
+    # JsonObject reads any key through __get, exactly as stdClass does. The
+    # keys come from the application, so no property list can name them.
+    universalObjectCratesClasses:
+        - Expo\Push\Support\JsonObject

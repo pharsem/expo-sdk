@@ -179,6 +179,26 @@ $results[] = measure('plan N messages of 100 devices', static function () use ($
     return [$plan->count(), sprintf('%d payload(s)', count($plan->payloads))];
 });
 
+$results[] = measure('copy the data of N messages', static function () use ($large): array {
+    // The bounded snapshot runs once for every message with a data field. The
+    // step keeps that path measured: it walks arrays and objects, checks every
+    // string and refuses a loop.
+    $count = intdiv($large, 10);
+    $bytes = 0;
+
+    for ($index = 0; $index < $count; ++$index) {
+        $message = PushMessage::to(benchTokens(1))->data([
+            'orderId' => $index,
+            'lines' => [['sku' => 'a', 'qty' => 1], ['sku' => 'b', 'qty' => 2]],
+            'meta' => (object) ['source' => 'web', 'tags' => ['x', 'y']],
+        ]);
+
+        $bytes += $message->sizeInBytes();
+    }
+
+    return [$count, sprintf('%d byte(s) of payload', $bytes)];
+});
+
 $results[] = measure('chunk a plan into requests of 100', static function () use ($large): array {
     $plan = Planner::plan(PushMessage::to(benchTokens($large))->title('Broadcast'));
     $chunks = $plan->chunks(100);

@@ -35,11 +35,24 @@ final class OfflineTransport implements HttpClient
     public array $requests = [];
 
     /**
-     * @param array<string, mixed> $body
+     * @param array<string, mixed>               $body
+     * @param array<string, string|list<string>> $headers
      */
-    public function queue(array $body, int $status = 200): self
+    public function queue(array $body, int $status = 200, array $headers = []): self
     {
-        $this->steps[] = new HttpResponse($status, (string) json_encode($body), [], null, 1);
+        $this->steps[] = new HttpResponse($status, (string) json_encode($body), $headers, null, 1);
+
+        return $this;
+    }
+
+    /**
+     * A body that is not JSON, for a 429 or a 503 answer.
+     *
+     * @param array<string, string|list<string>> $headers
+     */
+    public function queueRaw(string $body, int $status = 200, array $headers = []): self
+    {
+        $this->steps[] = new HttpResponse($status, $body, $headers, null, 1);
 
         return $this;
     }

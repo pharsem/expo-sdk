@@ -2,6 +2,160 @@
 
 This project uses [semantic versioning](https://semver.org/).
 
+## 3.0.0 - 2026-09-21
+
+A reliability patch. Recovery, scheduling, persistence and merging now tell one
+consistent story about what Expo accepted, what stays uncertain, when work can
+go out again, and which evidence has to survive.
+
+### Fixed
+
+- `recoverable()` keeps a notification that Expo refused for a transient
+  reason. A 429 with a `Retry-After` header left the worklist before, because
+  the selection read the acceptance alone. It now reads the acceptance and the
+  recovery disposition together.
+- A server `Retry-After` holds back every chunk of the bucket. Before, it held
+  back only the chunk that received it, so a fresh chunk started in the freed
+  slot and walked past a delay that the project already owed.
+- `operationDeadlineMs` bounds every wait. Before, the scheduler could sleep a
+  five second retry delay inside a 100 millisecond call. A chunk with a spent
+  budget could also build another request, and its timeout lost its clamp.
+- `PushMessage` rejects recursive and excessively deep data with
+  `InvalidMessageException`. Before, the copy walked the value until PHP ran out
+  of memory, which ended the process instead of raising.
+- The storage readers check the evidence of every claim. Before, an accepted
+  outcome could come back without a ticket, a broken index became zero, and a
+  missing `duplicateRisk` became "no risk".
+- `ReceiptResult::merge()` unites the conflicts of both sides. Before, it kept
+  only the conflicts of the left operand. Receipt equality now reads the
+  structured `details` as well, and ignores the order of their keys.
+- A message is immutable at every level. Before, a public read of the `data`
+  property handed out the stored `stdClass`, so
+  `$message->data->orderId = 456` changed the payload.
+- A credential error keeps the work open. Before, `InvalidCredentials`,
+  `InvalidProviderToken` and `MismatchSenderId` closed it, although the token
+  stays valid and a fix makes the notification sendable. Only
+  `DeviceNotRegistered` and `MessageTooBig` close the work now.
+- `needsAttention()` reads the same rule as `recoverable()`. Before, an open
+  `MessageRateExceeded` ticket brought no request failure, so the two answers
+  disagreed.
+- `receiptId()` needs a ticket that reports success. Before, an outcome that
+  claimed acceptance with an error ticket still gave an ID back, and
+  `isCompleteSuccess()` believed it.
+- A message with numeric data keys survives storage. Before, the round trip
+  turned the object into a PHP list and the constructor refused it.
+- A stored `recovery` value may not claim less than the evidence demands, and an
+  explicit `null` is a broken field. Before, changing a retryable 429 to `none`
+  dropped that work out of every recovery list in silence.
+- An outcome that points at a request failure which is not there no longer
+  loads. The same check covers a lookup entry and its failure.
+- Every later reference of one receipt entry names that entry's ID and device.
+  Before, storage could attach the correlation of another notification.
+- Two answers that give one receipt ID two different devices are a conflict.
+- A present request-failure field of the wrong type raises. Before,
+  `httpStatus`, `transportCode` and `earliestRetryAtUtcMs` became null, so a
+  corrupted retry time read as "retry now".
+- `Json::snapshot()` checks an object property name for UTF-8, as it already
+  did for an array key.
+- `JsonObject::fromNormalized()` checks what it wraps. Before, a caller could
+  wrap a live `stdClass` and reopen the mutation path.
+- A reused `JsonObject` counts its own nesting inside the value that holds it.
+  Before, nesting a valid 512 level object one level down passed the copy and
+  failed at the encode.
+- A limiter that blocks past the operation deadline reports `Deadline`, and it
+  keeps the moment that the limiter asked for. Before, it reported
+  `RateLimited` although the deadline ended the work.
+- A stored recovery value must match the error code of a rejected device. A
+  request failure decides the disposition of its own chunk, so work behind one
+  only has to stay open.
+- The acceptance and the evidence of a stored outcome must fit each other. Only
+  an accepted notification holds a successful ticket. Every uncertain one
+  carries a duplicate risk, and no rejected one does.
+- `PushTicket::fromStorageArray()` and `PushReceipt::fromStorageArray()` reject
+  a present `token`, `message` or `errorCode` of the wrong type. Before, a
+  numeric error code became an unknown error, which turned a permanent
+  rejection into work that waits for a fix.
+- A stored token must look like an Expo push token. Before, a broken one
+  escaped as `InvalidTokenException` from a reader that promises
+  `InvalidStorageException`.
+- Every part of one receipt entry names the same device. Before, an entry
+  without its own token accepted a receipt for one device and a later reference
+  for another.
+- Every request failure holds at least one notification or one receipt ID.
+- A send failure and its outcomes point at each other. Before, only one
+  direction was checked. A lookup keeps the one-way check, because a merge
+  leaves a failed request on the record after a later lookup answers.
+- `Json::sameJson()` compares two numbers as the SDK writes them. Before, `1`
+  and `1.0` read as a conflict although both go on the wire as `1`.
+- `Json::sameJson()` is bounded. The public details of a receipt accept any
+  array, so a value that loops exhausted the memory of the process before.
+- Every chunk that the operation deadline catches reports `Deadline`. Before, a
+  chunk behind one that the deadline caught could report `Skipped`.
+- A limiter that spends the chunk budget reports `Deadline` as well, and it
+  keeps the cooldown that the limiter asked for.
+- An empty stored data object comes back as an object. Before, it came back as
+  an array, and `withDatum()` with a numeric key then failed on the restored
+  message.
+- A present ticket `id` of the wrong type raises. Before, an error ticket lost
+  that evidence in silence.
+- `NotificationOutcome::fromStorageArray()` checks the token shape, as the
+  other readers already did.
+- A stored outcome with a rejection ticket cannot carry the reason
+  `NotTransmitted`. Expo answered it, so the reason is a rejection.
+- A merge of two devices for one receipt ID keeps one device, and the
+  correlation of the other one does not join the entry. Before, the merged
+  result could not read its own storage.
+- A result holds only the failures of its own operation.
+- `JsonObject::keys()` gives back strings. PHP turns a numeric property name
+  into an integer array key, and the declared type promised strings.
+
+
+### Added
+
+- `NotificationOutcome::$recovery`, a `RecoveryDisposition` of `None`,
+  `Retryable` or `NeedsIntervention`, plus `isOpen()`, `isRetryable()`,
+  `needsIntervention()` and `isDueAt()`.
+- `RecoverableWork::retryable()`, `needsIntervention()` and `dueAt()`. The
+  `summary()` array gains a `retryable` and a `needsIntervention` count.
+- `Expo\Push\Support\JsonObject`, the immutable form of a JSON object. It
+  reads like a `stdClass` and refuses every write.
+- `Json::MAX_DEPTH`, the documented nesting limit of 512 levels, and
+  `Json::sameJson()` for a semantic comparison of two decoded values.
+- A benchmark step that measures the bounded data copy.
+- `PushMessage::MAX_DATA_DEPTH` and `JsonObject::depth()`.
+
+### Changed
+
+- `PushMessage::$data` holds an `array` or a `JsonObject`, no longer a
+  `stdClass`. A read of a key still works. `get_object_vars()`, an `(array)`
+  cast and an `instanceof stdClass` check do not: use `toArray()`.
+- A chunk that the operation deadline caught reports `FailureCategory::Deadline`
+  instead of `Skipped`, and it keeps its own retry time.
+- A chunk that an earlier permanent failure stopped is no longer marked
+  retryable. It reports `NeedsIntervention` instead.
+- The storage shape of `NotificationOutcome` gains a `recovery` field. Schema
+  version 1 stays. An outcome written by 2.0.0 still reads: the reader derives
+  the careful disposition, which never turns open work into closed work.
+
+### Compatibility
+
+Three of the changes above go past a patch release, measured against the
+contract in [CONTRIBUTING.md](CONTRIBUTING.md):
+
+1. `PushMessage::$data` changes its declared type. Code that reads a key still
+   works. Code that calls `get_object_vars()`, casts with `(array)`, or checks
+   `instanceof stdClass` needs `toArray()` instead.
+2. `RecoveryDisposition` is a new enum, and `NotificationOutcome::$recovery` is
+   a new public property. An application that matches on every case of an enum
+   has a new value to read.
+3. The storage readers reject arrays that 2.0.0 accepted. Every array that
+   2.0.0 wrote still reads. An array that something else wrote, with a missing
+   or wrongly typed field, now raises `InvalidStorageException`.
+
+Each of the three is a major change under the contract in
+[CONTRIBUTING.md](CONTRIBUTING.md), so this release carries the major number.
+[MIGRATION.md](MIGRATION.md) takes you from 2.0 to 3.0.
+
 ## 2.0.0 - 2026-09-21
 
 A new result model. `send()` and `receipts()` no longer raise for an operational

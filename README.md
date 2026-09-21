@@ -23,7 +23,7 @@ count($result->notAttempted());  // the SDK never sent these
   optional observer.
 - Static analysis at PHPStan level 8.
 
-Coming from 1.0? Read [MIGRATION.md](MIGRATION.md).
+Coming from 1.0 or 2.0? Read [MIGRATION.md](MIGRATION.md).
 
 ## Install
 
@@ -68,12 +68,46 @@ Acceptance and duplicate risk are two different things:
 - An ambiguous attempt and then a rejection stays `Unknown`. The last answer
   cannot say what the earlier attempt did.
 
+Acceptance and recovery are two different things as well. Acceptance says what
+Expo did. `recovery` says what is left to do:
+
+| Recovery | Meaning | What to do |
+| --- | --- | --- |
+| `None` | nothing is left | Expo took it, or refused it for good |
+| `Retryable` | the failure can pass later | wait for `earliestRetryAtUtcMs`, then decide |
+| `NeedsIntervention` | a repeat needs a fix first | read the failure, fix the cause, then decide |
+
+Only two rejections close the work: `DeviceNotRegistered` and `MessageTooBig`.
+Both of them need another device or another message, so no repeat of this one
+can pass. Everything else stays open:
+
+| Expo says | Acceptance | Recovery |
+| --- | --- | --- |
+| a ticket with the status `ok` | `Accepted` | `None` |
+| `DeviceNotRegistered`, `MessageTooBig` | `NotAccepted` | `None` |
+| `MessageRateExceeded` | `NotAccepted` | `Retryable` |
+| `InvalidCredentials`, `InvalidProviderToken`, `MismatchSenderId` | `NotAccepted` | `NeedsIntervention` |
+| `ExpoError`, `ProviderError`, a code that the SDK does not know | `NotAccepted` | `NeedsIntervention` |
+| `429 Too Many Requests` for the whole request | `NotAccepted` | `Retryable` |
+| `401` for the whole request | `NotAccepted` | `NeedsIntervention` |
+
+A credential error keeps the token valid. Fix the credentials in the Expo
+dashboard, and the notification goes out.
+
+`needsAttention()` reads the same rule, so the two can never disagree:
+
+```php
+$result->needsAttention();          // true while anything stays open
+$result->recoverable()->isEmpty();  // false at the same moment
+```
+
 ```php
 foreach ($result->outcomes() as $outcome) {
     printf(
-        "#%d %s %s %s\n",
+        "#%d %s %s %s %s\n",
         $outcome->index,
         $outcome->acceptance->value,
+        $outcome->recovery->value,
         $outcome->receiptId() ?? '-',
         $outcome->duplicateRisk ? 'may duplicate' : ''
     );
@@ -228,6 +262,41 @@ $all = $receipts->merge($later);
 A returned receipt never falls back to missing. Two returned receipts that do
 not agree keep the first one, and the ID goes to `conflicts()`.
 
+Two receipts agree when their status, their error code, their message, their
+structured `details` and their device all agree. The order of the keys inside
+`details` means nothing. Two answers that give one receipt ID two different
+devices do not agree, and one answer that knows the device agrees with one that
+does not: the known token only adds what the other one lacks.
+
+Numbers count as the SDK writes them. It sends `1` and `1.0` as the same JSON,
+so two details that differ only in the PHP type are not a conflict.
+
+The comparison is bounded. `PushReceipt::$details` is public, so an application
+can build one that loops. A value that the comparison cannot walk to the end
+counts as different, and the ID goes to `conflicts()`.
+
+A merge keeps one device for one receipt ID. Two answers that name two devices
+are a conflict, the first device stays, and the correlation of the other one
+does not join the entry.
+
+One limit is worth knowing. The receipt parser turns every nested object inside
+`details` into an array before the SDK stores it, so a nested `{}` and a nested
+`[]` are the same value by the time a merge compares them.
+
+A conflict never goes away. A merge unites the conflicts of both sides before it
+looks for new ones, so it makes no difference which side already knew about one,
+or how a chain of merges was grouped:
+
+```php
+$conflicted = $first->merge($second);
+
+(new ReceiptResult())->merge($conflicted)->conflicts();  // the same list
+$conflicted->merge(new ReceiptResult())->conflicts();    // the same list
+```
+
+The resolution rules read in order, so `$a->merge($b)` and `$b->merge($a)` can
+keep different receipts. The conflict list of the two is the same.
+
 ## Store the receipt references
 
 The reference keeps the receipt ID, the device token, the input position and
@@ -253,16 +322,37 @@ them.
 
 ## Recover what is open
 
+`recoverable()` holds every notification that still needs a decision. That
+includes a notification that Expo is known not to have accepted, when the
+failure behind it can pass later.
+
+Read the work through two questions, and keep them apart.
+
+Can a repeat duplicate the notification?
+
 ```php
 $work = $result->recoverable();
 
 $work->notAttempted();  // a resend cannot duplicate
 $work->ambiguous();     // a resend may show the notification twice
+```
+
+May a repeat go out at all?
+
+```php
+$work->retryable();          // the failure can pass on a later attempt
+$work->needsIntervention();  // fix the cause first
+$work->dueAt($nowUtcMillis); // the retryable ones whose moment has come
+
 $queue->store($work->toStorageArray());
 ```
 
-The SDK never resends for you, and it never calls an ambiguous notification
-safe.
+Eligible is not the same as due. A deferred `429` is `Retryable` at once, and
+due only when `earliestRetryAtUtcMs` passes.
+
+An accepted notification never enters the work, and a rejection that a repeat
+cannot fix never enters it either. The SDK never resends for you, and it never
+calls an ambiguous notification safe.
 
 ## Retries
 
@@ -345,7 +435,34 @@ $failure->indexes;                // the exact input positions
 ```
 
 A rate limit cooldown holds back every chunk of the same bucket in that
-operation, not only the chunk that the server refused.
+operation, not only the chunk that the server refused. A local limiter denial
+and a server `Retry-After` feed the same cooldown, and the later of the two
+wins. A chunk that finishes never lets a fresh chunk step past a delay that the
+project already owes. Buckets stay apart: one operation holds one bucket, so a
+cooldown of one project never reaches another.
+
+### Deadlines
+
+`operationDeadlineMs` bounds the whole call. Every wait reads it: the SDK wakes
+at the first of the retry time, the bucket cooldown and the deadline, and it
+never sleeps past the deadline to reach an attempt that it may no longer start.
+
+```php
+$expo = new Expo(operationDeadlineMs: 100);
+
+// A 429 with "Retry-After: 5" arrives. The call returns after 100 ms, with one
+// request sent, and the work says that a retry makes sense in 5 seconds.
+```
+
+A deadline never shortens a delay that a server asked for. The SDK defers
+instead, and the deferral names the moment. A deadline also never erases
+evidence: a chunk that was already on the wire keeps its attempts, its ticket
+and its ambiguity, and a chunk that never went out stays `NotAttempted`.
+
+No request starts with a spent budget. The request timeout of one attempt
+follows the strictest of the chunk budget and the operation deadline. The SDK
+cannot stop a PSR-18 client that is already blocking, so `enforceHardDeadline`
+needs a transport that says it can.
 
 ## Concurrency
 
@@ -457,7 +574,25 @@ helper checks the whole operation first: a broken message in a later chunk shows
 up only when that chunk runs.
 
 Keep your queue from replaying a chunk that already produced tickets. Store the
-result, and schedule only `notAttempted()` and, deliberately, `unknown()`.
+result, and schedule the work that `recoverable()` gives you:
+
+```php
+$work = $result->recoverable();
+
+foreach ($work->dueAt($nowUtcMillis) as $outcome) {
+    // The failure can pass, and the moment has come. An ambiguous one can
+    // still show the notification twice, so read duplicateRisk first.
+    $queue->later($outcome);
+}
+
+foreach ($work->needsIntervention() as $outcome) {
+    $alerts->raise($outcome->detail);
+}
+```
+
+Do not schedule `notAttempted()` and `unknown()` alone. A notification that
+Expo refused with a `429` is neither of those, and it still needs to go out
+again.
 
 ## Storage
 
@@ -486,6 +621,55 @@ $result = SendResult::fromStorageArray($stored);
 The SDK reads schema version 1 and rejects anything else with a clear message.
 There is no migration framework: read an older version with your own code, or
 send the work again.
+
+### The reader checks the evidence
+
+A stored array must carry what it claims. The reader raises
+`InvalidStorageException` instead of filling a gap:
+
+- An accepted outcome needs a successful ticket with a usable receipt ID.
+- The identity fields (`index`, `recipientIndex`, `messageKey`, `token`) must be
+  there, and of the right type. A broken value never becomes zero.
+- `duplicateRisk`, `retryable` and `deferred` must be real booleans. A missing
+  flag never becomes the reassuring answer.
+- A ticket, a receipt and an entry must name the same device and the same ID.
+  Every later reference of one entry names that ID too.
+- A state value of this SDK must be one that this SDK writes. An error code of
+  Expo may be anything: provider codes stay open.
+- An outcome names the request failure that explains it, by position. The
+  position must be in the list, and that failure must have held this
+  notification.
+- A recovery value may not claim less than the evidence demands, and it may not
+  claim more. A rejected device reads its disposition from its error code, and
+  work behind a request failure only has to stay open.
+- The acceptance and the evidence must fit each other. Only an accepted
+  notification holds a successful ticket. Every uncertain one carries a
+  duplicate risk, and no rejected one does.
+- A stored token must look like an Expo push token, and every part of one
+  receipt entry names the same device.
+- Every request failure holds at least one notification or one receipt ID, and
+  it belongs to the operation of the result that holds it. For a send, the
+  failure and the outcome point at each other.
+- A stored token must look like an Expo push token in every reader, and a
+  present optional field of the wrong type raises everywhere.
+- A field that is there must be valid. A present field of the wrong type is
+  broken data, not an absent field, so a corrupted retry time never reads as
+  "retry now".
+
+A valid history is not a contradiction. An accepted outcome may carry an earlier
+ambiguous attempt and a duplicate risk, and an unknown outcome may carry the
+rejection that came after one.
+
+One rule covers an older writer of the same version: an outcome from 2.0.0 holds
+no `recovery` field. The reader then derives the careful value, which never
+turns open work into closed work. A `recovery` field that is there must be
+valid, and an explicit `null` is a broken field, not a missing one.
+
+A JSON object whose keys are all numbers decodes into a PHP list. In storage the
+`data` field of a message is always an object, so the reader gives that shape
+back as an object. Decode the stored JSON with `json_decode($json, true)` and a
+nested empty object comes back as an empty list, because the PHP array cannot
+hold the difference. Decode into objects when you need it.
 
 A stored array never holds a live exception, an HTTP client, a clock, a callback
 or a credential.
@@ -536,10 +720,52 @@ wrote, and gives the device token back.
 - `data` must be a JSON object: an associative array, an empty array, or a
   `stdClass`. An empty array goes out as `{}`. A list such as `[1, 2, 3]` has no
   keys, so the SDK rejects it.
-- The SDK copies your data. A later change to your array or object cannot reach
-  the message.
+- The SDK copies your data, and the copy cannot change. A later change to your
+  array or object cannot reach the message, and neither can a change to what the
+  message gives back.
 - Invalid UTF-8, `NAN`, `INF`, a resource and any object other than `stdClass`
   raise `InvalidMessageException` before any request.
+- Data deeper than 511 levels raises as well, and so does a value that refers
+  back to itself. `json_encode()` stops at 512 levels, and the message object
+  itself is one of them. `PushMessage::MAX_DATA_DEPTH` holds the number.
+
+### The data that a message gives back
+
+An array stays an array. An object becomes an `Expo\Push\Support\JsonObject`:
+
+```php
+$message = PushMessage::to($token)->data((object) ['orderId' => 123]);
+
+$message->data->orderId;         // 123, exactly as with a stdClass
+$message->data->missing ?? '-';  // '-'
+$message->data->toArray();       // ['orderId' => 123]
+
+$message->data->orderId = 456;   // LogicException: the data is immutable
+```
+
+`JsonObject` reads like a `stdClass` and refuses every write, at every level.
+The change closes the last way to alter a message after you build it.
+
+A `JsonObject` is a value, so you can give one to another message. It counts its
+own nesting once, and the levels of the value that holds it add to that count.
+
+`keys()` gives back the names that the JSON holds. PHP turns a numeric property
+name into an integer array key, and `toArray()` shows that raw form.
+
+Three habits of `stdClass` do not carry over. Use `toArray()` for the first two:
+
+- `get_object_vars($message->data)` returns an empty array.
+- `(array) $message->data` gives the internal field, not the values.
+- `$message->data instanceof stdClass` is false.
+
+With PHPStan, name the class as a universal object crate so that a read of any
+key stays valid:
+
+```neon
+parameters:
+    universalObjectCratesClasses:
+        - Expo\Push\Support\JsonObject
+```
 
 ### The size check
 
@@ -726,14 +952,14 @@ The package follows [semantic versioning](https://semver.org/).
 ```json
 {
     "require": {
-        "pharsem/expo-sdk": "^2.0"
+        "pharsem/expo-sdk": "^3.0"
     }
 }
 ```
 
 [CONTRIBUTING.md](CONTRIBUTING.md) names the parts of the code that the contract
 covers. [CHANGELOG.md](CHANGELOG.md) lists every release.
-[MIGRATION.md](MIGRATION.md) takes you from 1.0 to 2.0.
+[MIGRATION.md](MIGRATION.md) takes you from 1.0 to 2.0, and from 2.0 to 3.0.
 
 ## License
 

@@ -181,26 +181,81 @@ final readonly class PushTicket implements JsonSerializable
             ));
         }
 
-        $token = $data['token'] ?? null;
-        $message = $data['message'] ?? null;
-        $errorCode = $data['errorCode'] ?? null;
         $details = $data['details'] ?? [];
 
         if (!is_array($details)) {
             throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'details');
         }
 
+        // An error code of the wrong type would read as an unknown error, and
+        // that turns a permanent rejection into work that waits for a fix.
+        $errorCode = self::storedOptionalString($data, 'errorCode');
+
+        // The writer of this SDK emits a string or leaves the field out. A
+        // present value of another type is broken evidence.
+        if ($id !== null && !is_string($id)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, 'id');
+        }
+
         /** @var array<string, mixed> $details */
         return new self(
             status: $status,
-            id: is_string($id) ? $id : null,
-            token: is_string($token) ? new PushToken($token) : null,
-            message: is_string($message) ? $message : null,
-            error: is_string($errorCode) ? PushError::tryFrom($errorCode) : null,
-            errorCode: is_string($errorCode) ? $errorCode : null,
+            id: $id,
+            token: self::storedToken($data, 'token'),
+            message: self::storedOptionalString($data, 'message'),
+            error: $errorCode === null ? null : PushError::tryFrom($errorCode),
+            errorCode: $errorCode,
             details: $details,
         );
     }
+
+    /**
+     * A stored token, checked before it becomes a `PushToken`.
+     *
+     * The reader of a stored array promises `InvalidStorageException`. A token
+     * of the wrong shape must not escape as an `InvalidTokenException`.
+     *
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidStorageException
+     */
+    private static function storedToken(array $data, string $field): ?PushToken
+    {
+        $value = $data[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value) || !PushToken::isValid($value)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return new PushToken($value);
+    }
+
+    /**
+     * A present field of the wrong type is broken data, not an absent field.
+     *
+     * @param array<string, mixed> $data
+     *
+     * @throws InvalidStorageException
+     */
+    private static function storedOptionalString(array $data, string $field): ?string
+    {
+        $value = $data[$field] ?? null;
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (!is_string($value)) {
+            throw InvalidStorageException::missingField(self::STORAGE_TYPE, $field);
+        }
+
+        return $value;
+    }
+
 
     /**
      * The same shape as `toStorageArray()`.

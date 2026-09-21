@@ -19,6 +19,7 @@ use Expo\Push\Result\Acceptance;
 use Expo\Push\Result\NotAcceptedReason;
 use Expo\Push\Result\NotificationOutcome;
 use Expo\Push\Result\OperationType;
+use Expo\Push\Result\RecoveryDisposition;
 use Expo\Push\Result\RequestFailure;
 use Expo\Push\Result\SendResult;
 use Expo\Push\Retry\RetryEngine;
@@ -40,6 +41,17 @@ use Expo\Push\Support\Sleeper;
  *   nothing: every attempt failed before transmission, or the server refused the
  *   request with a 4xx status. It gives `Unknown` otherwise.
  * - A chunk that never went out gives `NotAttempted`.
+ *
+ * The recovery disposition follows a second, separate rule. Acceptance says what
+ * Expo did. Recovery says what is left to do:
+ *
+ * - An accepted notification is never open work.
+ * - A ticket rejection closes the work only when the error code says that a
+ *   later send cannot work. `MessageRateExceeded` stays open, and an error code
+ *   that the SDK does not know asks the application to look.
+ * - A failed or skipped chunk gives its own retryability to every notification
+ *   that it held, and to those alone. A transient failure of one chunk never
+ *   makes the permanent rejection of another chunk look retryable.
  */
 final readonly class SendOperation
 {
@@ -107,6 +119,7 @@ final readonly class SendOperation
             OperationType::Send,
             $this->continueAfterFailure,
             $this->operationDeadlineMs,
+            $this->engine->settings()->maxInlineWaitMs,
         );
 
         $scheduler->run($runners);
@@ -205,8 +218,6 @@ final readonly class SendOperation
 
     private function acceptedOutcome(int $index, ?PushTicket $ticket, bool $ambiguous): NotificationOutcome
     {
-        $planned = $this->plan->notification($index);
-
         if ($ticket === null) {
             // The request reached Expo and Expo answered. The entry is not
             // readable, so Expo may well have accepted this notification. A
@@ -218,6 +229,7 @@ final readonly class SendOperation
                 null,
                 true,
                 null,
+                RecoveryDisposition::NeedsIntervention,
                 'the ticket entry at this position was malformed, so acceptance is unknown'
             );
         }
@@ -230,6 +242,7 @@ final readonly class SendOperation
                 null,
                 $ambiguous,
                 null,
+                RecoveryDisposition::None,
                 $ambiguous
                     ? 'an earlier attempt was ambiguous, so the device can show this notification twice'
                     : null
@@ -244,18 +257,36 @@ final readonly class SendOperation
                 null,
                 true,
                 null,
+                // The work stays open whatever the code says: an earlier attempt
+                // can already have been accepted, so only the application can
+                // weigh a repeat.
+                self::ticketRecovery($ticket) === RecoveryDisposition::Retryable
+                    ? RecoveryDisposition::Retryable
+                    : RecoveryDisposition::NeedsIntervention,
                 'the last answer rejected this notification, and an earlier ambiguous attempt can already have '
                 . 'been accepted'
             );
         }
 
-        unset($planned);
-
-        return $this->outcomeFor($index, Acceptance::NotAccepted, $ticket, NotAcceptedReason::Rejected, false, null);
+        return $this->outcomeFor(
+            $index,
+            Acceptance::NotAccepted,
+            $ticket,
+            NotAcceptedReason::Rejected,
+            false,
+            null,
+            self::ticketRecovery($ticket)
+        );
     }
 
     private function failedOutcome(int $index, ChunkOutcome $outcome, int $failureIndex): NotificationOutcome
     {
+        // The chunk owns the retryability of everything that it held, and of
+        // nothing else.
+        $recovery = $outcome->retryable
+            ? RecoveryDisposition::Retryable
+            : RecoveryDisposition::NeedsIntervention;
+
         if (!$outcome->dispatched) {
             return $this->outcomeFor(
                 $index,
@@ -264,6 +295,7 @@ final readonly class SendOperation
                 null,
                 false,
                 $failureIndex,
+                $recovery,
                 $outcome->message,
                 $outcome->earliestRetryAtUtcMs
             );
@@ -277,6 +309,7 @@ final readonly class SendOperation
                 $outcome->serverRefused ? NotAcceptedReason::Rejected : NotAcceptedReason::NotTransmitted,
                 false,
                 $failureIndex,
+                $recovery,
                 $outcome->message,
                 $outcome->earliestRetryAtUtcMs
             );
@@ -289,9 +322,27 @@ final readonly class SendOperation
             null,
             true,
             $failureIndex,
+            $recovery,
             $outcome->message,
             $outcome->earliestRetryAtUtcMs
         );
+    }
+
+    /**
+     * What one rejected ticket leaves open.
+     *
+     * Expo answers with an error code for this one device, and the code decides:
+     *
+     * - `MessageRateExceeded` can pass later on its own.
+     * - A credential error needs a fix in the Expo dashboard first. The token
+     *   stays valid, so the work stays open.
+     * - `DeviceNotRegistered` and `MessageTooBig` close the work. No repeat of
+     *   the same message to the same device can pass.
+     * - A code that the SDK does not know says nothing either way.
+     */
+    private static function ticketRecovery(PushTicket $ticket): RecoveryDisposition
+    {
+        return RecoveryDisposition::forClassification($ticket->classification());
     }
 
     private function outcomeFor(
@@ -301,6 +352,7 @@ final readonly class SendOperation
         ?NotAcceptedReason $reason,
         bool $duplicateRisk,
         ?int $failureIndex,
+        RecoveryDisposition $recovery,
         ?string $detail = null,
         ?int $earliestRetryAtUtcMs = null,
     ): NotificationOutcome {
@@ -323,6 +375,7 @@ final readonly class SendOperation
             failureIndex: $failureIndex,
             earliestRetryAtUtcMs: $earliestRetryAtUtcMs,
             detail: $detail,
+            recovery: $recovery,
         );
     }
 }

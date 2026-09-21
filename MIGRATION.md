@@ -1,4 +1,86 @@
-# Migration from 1.0 to 2.0
+# Migration
+
+[From 2.0 to 3.0](#from-20-to-30) covers this release.
+[From 1.0 to 2.0](#from-10-to-20) follows it.
+
+## From 2.0 to 3.0
+
+Version 3.0 hardens what 2.0 built. Recovery, scheduling, persistence and
+merging now tell one story about what Expo accepted and what is left to do.
+Three changes need a look at your code.
+
+### 1. Message data reads back as a `JsonObject`
+
+`PushMessage::$data` holds an `array` or an `Expo\Push\Support\JsonObject`. A
+`stdClass` that you pass in becomes a `JsonObject`, which reads the same way and
+refuses every write. Nothing outside the message can change what it sends.
+
+```php
+$message = PushMessage::to($token)->data((object) ['orderId' => 123]);
+
+$message->data->orderId;         // 123, as before
+$message->data->orderId = 456;   // LogicException, new in 3.0
+```
+
+Three habits of `stdClass` need `toArray()` instead:
+
+| 2.0 | 3.0 |
+| --- | --- |
+| `get_object_vars($message->data)` | `$message->data->toArray()` |
+| `(array) $message->data` | `$message->data->toArray()` |
+| `$message->data instanceof stdClass` | `$message->data instanceof JsonObject` |
+
+The data that you give the SDK does not change. An array stays an array, an
+object stays an object on the wire, and `toExpoArray()` writes the same JSON.
+
+Data may nest 511 levels now, one less than the limit of `json_encode()`. The
+message object itself is the level that the SDK reserves.
+`PushMessage::MAX_DATA_DEPTH` holds the number.
+
+### 2. Every outcome carries a recovery disposition
+
+`NotificationOutcome::$recovery` says what is left to do, next to the acceptance
+that says what Expo did:
+
+| Recovery | Meaning |
+| --- | --- |
+| `None` | Expo took it, or refused it for good |
+| `Retryable` | the failure can pass later |
+| `NeedsIntervention` | fix the cause first |
+
+`recoverable()` reads it. A notification that Expo refused with a `429` is open
+work now, and 2.0 dropped it. Replace a worklist that reads `notAttempted()` and
+`unknown()` alone:
+
+```php
+$work = $result->recoverable();
+
+foreach ($work->dueAt($nowUtcMillis) as $outcome) { /* send it again */ }
+foreach ($work->needsIntervention() as $outcome) { /* fix the cause */ }
+```
+
+`RecoverableWork::summary()` gains a `retryable` and a `needsIntervention`
+count. `needsAttention()` reads the same rule as `recoverable()`, so the two can
+no longer disagree.
+
+### 3. The storage readers demand their evidence
+
+`fromStorageArray()` rejects an array that 2.0 accepted. Every array that 2.0
+*wrote* still reads, so a stored result of 2.0 loads without a change.
+
+A hand-built or corrupted array raises `InvalidStorageException` when a required
+field is missing, a present field holds the wrong type, or two fields
+contradict each other. Read the "Storage" section of the README for the rules.
+
+Schema version 1 stays. An outcome that 2.0 wrote holds no `recovery` field, and
+the reader derives the careful value for it.
+
+### Nothing else moves
+
+Every other method, every other name and every storage type stay as they are.
+The retry policies, the concurrency, the limiter and the observer do not change.
+
+## From 1.0 to 2.0
 
 Version 2.0 changes what `send()` and `receipts()` return, and it removes the
 exceptions that hid the successful part of a batch. Read this page once, change

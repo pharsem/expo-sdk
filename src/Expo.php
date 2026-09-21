@@ -31,6 +31,7 @@ use Expo\Push\Retry\RetryPolicy;
 use Expo\Push\Support\Clock;
 use Expo\Push\Support\FullJitter;
 use Expo\Push\Support\Jitter;
+use Expo\Push\Support\JsonObject;
 use Expo\Push\Support\Sleeper;
 use Expo\Push\Support\SystemClock;
 use Expo\Push\Support\SystemSleeper;
@@ -61,7 +62,7 @@ use stdClass;
  */
 final readonly class Expo
 {
-    public const string VERSION = '2.0.0';
+    public const string VERSION = '3.0.0';
 
     /**
      * The largest number of notifications in one send request, from the Expo API
@@ -284,8 +285,8 @@ final readonly class Expo
     /**
      * Sends a simple notification to one or more devices.
      *
-     * @param PushToken|string|iterable<PushToken|string> $to
-     * @param array<string, mixed>|stdClass|null         $data
+     * @param PushToken|string|iterable<PushToken|string>   $to
+     * @param array<string, mixed>|stdClass|JsonObject|null $data
      *
      * @throws InvalidMessageException
      * @throws MessageTooLargeException
@@ -295,7 +296,7 @@ final readonly class Expo
         PushToken|string|iterable $to,
         string $title,
         ?string $body = null,
-        array|stdClass|null $data = null,
+        array|stdClass|JsonObject|null $data = null,
         ?string $reference = null,
     ): SendResult {
         return $this->send(new PushMessage(

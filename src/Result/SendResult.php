@@ -198,6 +198,10 @@ final readonly class SendResult implements JsonSerializable
 
     /**
      * True when every notification is accepted and no request failed.
+     *
+     * The answer reads the evidence, not the label. An outcome that claims
+     * acceptance without a successful ticket and a receipt ID never counts, so
+     * a restored result cannot report more than it can show.
      */
     public function isCompleteSuccess(): bool
     {
@@ -205,8 +209,14 @@ final readonly class SendResult implements JsonSerializable
             return false;
         }
 
+        if ($this->outcomes === []) {
+            return true;
+        }
+
         foreach ($this->outcomes as $outcome) {
-            if (!$outcome->isAccepted()) {
+            // receiptId() already demands a ticket that reports success, so
+            // this covers both halves of the evidence.
+            if (!$outcome->isAccepted() || $outcome->receiptId() === null) {
                 return false;
             }
         }
@@ -231,12 +241,26 @@ final readonly class SendResult implements JsonSerializable
     }
 
     /**
-     * True when anything at all is unresolved: a request failure, an unknown
-     * acceptance, or work that the SDK never tried.
+     * True when anything at all is unresolved.
+     *
+     * The answer reads the same rule as `recoverable()`, so the two can never
+     * disagree. A request failure counts. So does an open notification without
+     * one: Expo can refuse a single device with `MessageRateExceeded`, and that
+     * notification still needs a decision.
      */
     public function needsAttention(): bool
     {
-        return $this->requestFailures !== [] || $this->unknown() !== [] || $this->notAttempted() !== [];
+        if ($this->requestFailures !== []) {
+            return true;
+        }
+
+        foreach ($this->outcomes as $outcome) {
+            if ($outcome->isOpen()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -327,7 +351,7 @@ final readonly class SendResult implements JsonSerializable
     {
         $data = StorageEnvelope::unwrap(self::STORAGE_TYPE, $stored);
 
-        return new self(
+        $result = new self(
             outcomes: array_map(
                 static fn (array $entry): NotificationOutcome => NotificationOutcome::fromStorageArray($entry),
                 StorageEnvelope::listOfArrays(self::STORAGE_TYPE, $data, 'outcomes')
@@ -339,6 +363,78 @@ final readonly class SendResult implements JsonSerializable
             uncorrelatedIds: StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'uncorrelatedIds'),
             warnings: StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'warnings'),
         );
+
+        $result->assertFailuresMatchOutcomes();
+
+        return $result;
+    }
+
+    /**
+     * Refuses an outcome and a request failure that do not agree.
+     *
+     * One outcome names the request failure that explains it, by position, and
+     * that failure names the notification back. A send builds both sides at
+     * once, so the two lists point at each other or the array is broken.
+     *
+     * @throws InvalidStorageException
+     */
+    private function assertFailuresMatchOutcomes(): void
+    {
+        $count = count($this->requestFailures);
+        $pointsAt = [];
+
+        foreach ($this->requestFailures as $position => $failure) {
+            if ($failure->operation !== OperationType::Send) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s holds a %s failure at position %d. A send holds only send failures.',
+                    self::STORAGE_TYPE,
+                    $failure->operation->value,
+                    $position
+                ));
+            }
+        }
+
+        foreach ($this->outcomes as $outcome) {
+            $index = $outcome->failureIndex;
+
+            if ($index === null) {
+                continue;
+            }
+
+            if ($index >= $count) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s has an outcome at index %d that points at request failure %d of %d.',
+                    self::STORAGE_TYPE,
+                    $outcome->index,
+                    $index,
+                    $count
+                ));
+            }
+
+            if (!in_array($outcome->index, $this->requestFailures[$index]->indexes, true)) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s has an outcome at index %d whose request failure never held it.',
+                    self::STORAGE_TYPE,
+                    $outcome->index
+                ));
+            }
+
+            $pointsAt[$index][$outcome->index] = true;
+        }
+
+        foreach ($this->requestFailures as $position => $failure) {
+            foreach ($failure->indexes as $index) {
+                if (!isset($pointsAt[$position][$index])) {
+                    throw new InvalidStorageException(sprintf(
+                        'The stored %s has a request failure at position %d that names index %d, and no outcome '
+                        . 'there points back at it.',
+                        self::STORAGE_TYPE,
+                        $position,
+                        $index
+                    ));
+                }
+            }
+        }
     }
 
     /**

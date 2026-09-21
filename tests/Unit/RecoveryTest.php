@@ -32,7 +32,13 @@ final class RecoveryTest extends TestCase
         self::assertSame(['batch-1'], $work->references());
         self::assertCount(4, $work->tokens());
         self::assertSame(
-            ['total' => 4, 'notAttempted' => 2, 'ambiguous' => 2],
+            [
+                'total' => 4,
+                'notAttempted' => 2,
+                'ambiguous' => 2,
+                'retryable' => 4,
+                'needsIntervention' => 0,
+            ],
             $work->summary()
         );
     }
@@ -64,7 +70,14 @@ final class RecoveryTest extends TestCase
 
         $work = $this->expo($http)->send(PushMessage::to(self::TOKEN_A))->recoverable();
 
+        // An empty worklist must never pass this test. A retry time with
+        // nothing to retry is the exact shape of the bug that it guards.
+        self::assertFalse($work->isEmpty());
+        self::assertSame(1, $work->count());
+        self::assertSame([0], $work->indexes());
+        self::assertSame(self::TOKEN_A, $work->outcomes[0]->token->value);
         self::assertSame($this->clock->nowUtcMillis() + 90_000, $work->earliestRetryAtUtcMs);
+        self::assertSame($this->clock->nowUtcMillis() + 90_000, $work->outcomes[0]->earliestRetryAtUtcMs);
     }
 
     public function testTheWorkRoundTripsThroughStorage(): void

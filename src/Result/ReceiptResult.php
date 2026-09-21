@@ -11,6 +11,7 @@ use Expo\Push\PushReceipt;
 use Expo\Push\PushToken;
 use Expo\Push\ReceiptCollection;
 use Expo\Push\Storage\StorageEnvelope;
+use Expo\Push\Support\Json;
 use JsonSerializable;
 
 /**
@@ -295,10 +296,20 @@ final readonly class ReceiptResult implements JsonSerializable
      * The rules:
      *
      * - A returned receipt never falls back to missing, malformed or failed.
-     * - The same receipt twice stays one entry.
+     * - The same receipt twice stays one entry. Two receipts are the same when
+     *   their status, their error code, their message and their structured
+     *   details all agree. Key order inside the details means nothing, and a
+     *   JSON object never equals a JSON list.
      * - Two returned receipts that do not agree keep the first one, and the ID
      *   goes to `conflicts()`.
      * - An ID that only the other result holds joins at the end.
+     *
+     * A conflict never goes away. The result unites the conflicts of both
+     * inputs before it looks for new ones, so it makes no difference which side
+     * already knew about one, or how a chain of merges was grouped.
+     *
+     * The resolution rules read in order, so `a->merge($b)` and `b->merge($a)`
+     * can keep different receipts. The conflict list of the two is the same.
      */
     #[\NoDiscard]
     public function merge(self $other): self
@@ -312,7 +323,17 @@ final readonly class ReceiptResult implements JsonSerializable
             $index[$entry->id] = $position;
         }
 
-        $conflicts = $this->conflicts;
+        // Both sides bring what they already knew. A contradiction that one
+        // lookup found must not vanish because the other side is the receiver.
+        $conflicts = [];
+        $seenConflicts = [];
+
+        foreach ([...$this->conflicts, ...$other->conflicts] as $id) {
+            if (!isset($seenConflicts[$id])) {
+                $seenConflicts[$id] = true;
+                $conflicts[] = $id;
+            }
+        }
 
         foreach ($other->entries as $entry) {
             $shifted = $entry->failureIndex === null ? null : $entry->failureIndex + $offset;
@@ -345,9 +366,17 @@ final readonly class ReceiptResult implements JsonSerializable
             $notificationIndex = $current->notificationIndex ?? $entry->notificationIndex;
             $reference = $current->reference ?? $entry->reference;
             $others = self::joinReferences($current, $entry);
+            $winning = self::firstToken($token, $current->receipt, $entry->receipt);
+
+            // One receipt ID belongs to one notification, and therefore to one
+            // device. A reference that names another device is a contradiction,
+            // not a correlation: `conflicts()` records it, and the entry drops
+            // it rather than claiming two devices.
+            $others = self::withoutOtherDevices($others, $winning);
 
             if ($current->isReturned() && $entry->isReturned()) {
-                if (!self::sameReceipt($current->receipt, $entry->receipt) && !in_array($entry->id, $conflicts, true)) {
+                if (!self::sameReceipt($current->receipt, $entry->receipt) && !isset($seenConflicts[$entry->id])) {
+                    $seenConflicts[$entry->id] = true;
                     $conflicts[] = $entry->id;
                 }
 
@@ -452,7 +481,7 @@ final readonly class ReceiptResult implements JsonSerializable
     {
         $data = StorageEnvelope::unwrap(self::STORAGE_TYPE, $stored);
 
-        return new self(
+        $result = new self(
             entries: array_map(
                 static fn (array $entry): ReceiptEntry => ReceiptEntry::fromStorageArray($entry),
                 StorageEnvelope::listOfArrays(self::STORAGE_TYPE, $data, 'entries')
@@ -465,6 +494,57 @@ final readonly class ReceiptResult implements JsonSerializable
             warnings: StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'warnings'),
             conflicts: StorageEnvelope::listOfStrings(self::STORAGE_TYPE, $data, 'conflicts'),
         );
+
+        $result->assertFailuresMatchEntries();
+
+        return $result;
+    }
+
+    /**
+     * Refuses an entry that points at evidence which is not there.
+     *
+     * @throws InvalidStorageException
+     */
+    private function assertFailuresMatchEntries(): void
+    {
+        $count = count($this->requestFailures);
+
+        foreach ($this->requestFailures as $position => $failure) {
+            if ($failure->operation !== OperationType::Receipts) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s holds a %s failure at position %d. A lookup holds only lookup failures.',
+                    self::STORAGE_TYPE,
+                    $failure->operation->value,
+                    $position
+                ));
+            }
+        }
+
+        foreach ($this->entries as $entry) {
+            $index = $entry->failureIndex;
+
+            if ($index === null) {
+                continue;
+            }
+
+            if ($index >= $count) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s has the entry "%s" that points at request failure %d of %d.',
+                    self::STORAGE_TYPE,
+                    $entry->id,
+                    $index,
+                    $count
+                ));
+            }
+
+            if (!in_array($entry->id, $this->requestFailures[$index]->ids, true)) {
+                throw new InvalidStorageException(sprintf(
+                    'The stored %s has the entry "%s" whose request failure never asked about it.',
+                    self::STORAGE_TYPE,
+                    $entry->id
+                ));
+            }
+        }
     }
 
     /**
@@ -490,6 +570,42 @@ final readonly class ReceiptResult implements JsonSerializable
         }
 
         return $ids;
+    }
+
+    /**
+     * The first device that any of these parts names, or null.
+     */
+    private static function firstToken(?PushToken $token, ?PushReceipt $first, ?PushReceipt $second): ?PushToken
+    {
+        if ($token !== null) {
+            return $token;
+        }
+
+        if ($first !== null && $first->token !== null) {
+            return $first->token;
+        }
+
+        return $second?->token;
+    }
+
+    /**
+     * The references that name the device of the entry, or no device at all.
+     *
+     * @param list<ReceiptReference> $references
+     *
+     * @return list<ReceiptReference>
+     */
+    private static function withoutOtherDevices(array $references, ?PushToken $device): array
+    {
+        if ($device === null) {
+            return $references;
+        }
+
+        return array_values(array_filter(
+            $references,
+            static fn (ReceiptReference $reference): bool => $reference->token === null
+                || $reference->token->value === $device->value
+        ));
     }
 
     /**
@@ -546,14 +662,36 @@ final readonly class ReceiptResult implements JsonSerializable
         };
     }
 
+    /**
+     * True when two receipts say the same thing about the same notification.
+     *
+     * The comparison reads four things: the status, the error code, the message
+     * and the structured details. A detail that changed is a real
+     * contradiction, and the order of the keys inside the details is not. The
+     * details arrive as the SDK stored them, so a nested empty object and a
+     * nested empty list are already the same value by then.
+     *
+     * The device counts as well. Two answers that give one receipt ID two
+     * different devices contradict each other. One answer that knows the device
+     * and one that does not agree: the known token only adds what the other one
+     * lacks.
+     */
     private static function sameReceipt(?PushReceipt $first, ?PushReceipt $second): bool
     {
         if ($first === null || $second === null) {
             return $first === $second;
         }
 
+        $firstToken = $first->token;
+        $secondToken = $second->token;
+
+        if ($firstToken !== null && $secondToken !== null && $firstToken->value !== $secondToken->value) {
+            return false;
+        }
+
         return $first->status === $second->status
             && $first->errorCode === $second->errorCode
-            && $first->message === $second->message;
+            && $first->message === $second->message
+            && Json::sameJson($first->details, $second->details);
     }
 }
