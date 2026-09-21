@@ -654,9 +654,7 @@ final readonly class PushMessage implements JsonSerializable
         }
 
         if ($value instanceof stdClass) {
-            $array = Json::objectToArray($value);
-
-            return $array === [] ? [] : $array;
+            return Json::objectToArray($value);
         }
 
         if (!is_array($value)) {
