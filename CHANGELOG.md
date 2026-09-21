@@ -2,7 +2,7 @@
 
 This project uses [semantic versioning](https://semver.org/).
 
-## 1.0.0 - unreleased
+## 1.0.0 - 2026-09-21
 
 The first release.
 

@@ -370,6 +370,26 @@ composer test      # PHPUnit
 composer analyse   # PHPStan level 8
 ```
 
+## Versions
+
+The package follows [semantic versioning](https://semver.org/). A minor release
+never breaks your code. Pin it in your composer.json:
+
+```json
+{
+    "require": {
+        "pharsem/expo-sdk": "^1.0"
+    }
+}
+```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) names the parts of the code that the contract
+covers. [CHANGELOG.md](CHANGELOG.md) lists every release.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md). The project uses Conventional Commits.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -1,0 +1,45 @@
+#!/bin/sh
+#
+# Rejects a commit message that is not a Conventional Commit.
+#
+# Turn the hook on one time for each clone:
+#   git config core.hooksPath .githooks
+
+message_file="$1"
+subject=$(head -n 1 "$message_file")
+
+# Git writes these messages itself. Let them pass.
+case "$subject" in
+    "Merge "*|"Revert "*|"fixup!"*|"squash!"*|"#"*|"")
+        exit 0
+        ;;
+esac
+
+types='build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
+pattern="^($types)(\([a-z0-9._/-]+\))?!?: .+"
+
+if ! printf '%s' "$subject" | grep -Eq "$pattern"; then
+    echo "The commit message is not a Conventional Commit."
+    echo
+    echo "  Got:    $subject"
+    echo "  Format: type(scope): summary"
+    echo "  Types:  $types"
+    echo
+    echo "  Example: feat(message): add the icon field for Android"
+    echo "  Example: fix(expo): retry a 503 answer"
+    echo "  Mark a breaking change with an exclamation mark: feat!: drop PHP 8.3"
+    exit 1
+fi
+
+length=$(printf '%s' "$subject" | wc -c)
+
+if [ "$length" -gt 72 ]; then
+    echo "The first line has $length characters. The limit is 72."
+    echo
+    echo "  Got: $subject"
+    echo
+    echo "  Move the detail to the body. Leave one empty line before the body."
+    exit 1
+fi
+
+exit 0
